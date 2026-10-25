@@ -3,22 +3,20 @@ Mobile-Friendly Stock Portfolio Tracker (Streamlit App)
 =======================================================
 Supports:
 1. Direct Zerodha Kite / Console Tradebook Import (Multi-year CSV/XLSX upload):
+   - Uses the enhanced dynamic header scanner for Zerodha CSV/XLSX files
    - Automatically filters out Intraday / Day-Trading trades (same-day Buy & Sell netting)
    - Deduplicates overlapping tradebooks using Zerodha `trade_id`
    - Uses FIFO (First-In, First-Out) delivery accounting (matching Zerodha Console) to handle
      historical BUY and SELL delivery trades, computing:
        * Current Active Holdings (Total Remaining Qty, FIFO Avg. Buy Price, Current Invested Rs., % Share)
        * Realized P&L from past sold delivery stocks
-   - Auto-maps NSE/BSE symbols to Sector & Market Cap Category (Large / Mid / Small Cap) using a
-     built-in Indian stock directory + optional Yahoo Finance (`yfinance`) auto-enrichment.
-2. Google Sheet Import (.xlsx, .csv, or public URL) & Manual Monthly Entries.
-3. Permanent Cloud Persistence (No Reset on Streamlit Sleep!):
-   - Automatically backs up and restores `portfolio_data.db` directly to/from your GitHub repository
-     whenever you add or import trades (configured via Streamlit Secrets: GITHUB_TOKEN & GITHUB_REPO).
-
-How to Run:
-    pip install streamlit pandas plotly openpyxl yfinance numpy
-    streamlit run portfolio_tracker.py
+2. Enhanced Dashboard & Analytics:
+   - Frozen (Pinned) `Stock Name` column on the left + editable `Remarks (Future Action)` column at the end
+   - User-configurable Stock Concentration (%) and Sector Concentration (%) warning thresholds
+   - Dedicated Unrealized P&L Graph (Green/Red diverging profit & loss chart in ₹ and %)
+   - Full-width, high-clarity Monthly Investment Trend (Combo Bar + Cumulative Growth Line & Year×Month Heatmap)
+   - Interactive Date / Month / Year Filter showing Stock-Wise Bought & Sold Value for any period
+3. Permanent Cloud Persistence (Auto-syncs `portfolio_data.db` to/from GitHub repo).
 """
 
 import base64
@@ -26,6 +24,8 @@ import io
 import json
 import re
 import sqlite3
+import subprocess
+import sys
 import urllib.error
 import urllib.request
 from collections import deque
@@ -34,14 +34,36 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 
-# Optional live price & metadata fetching via yfinance
+
+# ---------------------------------------------------------------------------
+# Auto-Install Missing Dependencies Fallback (in case requirements.txt is missed)
+# ---------------------------------------------------------------------------
+def _ensure_package(import_name: str, pip_name: str | None = None) -> bool:
+    pkg = pip_name or import_name
+    try:
+        __import__(import_name)
+        return True
+    except ModuleNotFoundError:
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "--quiet"])
+            return True
+        except Exception:
+            return False
+
+
+_ensure_package("plotly")
+_ensure_package("openpyxl")
+_ensure_package("yfinance")
+
+import plotly.express as px
+import plotly.graph_objects as go
+
 try:
     import yfinance as yf
     YFINANCE_AVAILABLE = True
-except ImportError:
+except Exception:
     YFINANCE_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
@@ -119,7 +141,6 @@ def restore_db_from_github_if_needed() -> bool:
     if not token or not repo:
         return False
 
-    # If local DB already has rows, no need to overwrite
     if DB_PATH.exists() and DB_PATH.stat().st_size > 12288:
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -159,7 +180,7 @@ def restore_db_from_github_if_needed() -> bool:
 def push_db_to_github(commit_msg: str = "Auto-sync portfolio_data.db from Streamlit app") -> tuple[bool, str]:
     """
     Automatically commit and push `portfolio_data.db` back to the GitHub repository
-    whenever transactions or metadata change.
+    whenever transactions, remarks, or settings change.
     """
     token, repo, branch = get_github_sync_config()
     if not token or not repo or not DB_PATH.exists():
@@ -173,7 +194,6 @@ def push_db_to_github(commit_msg: str = "Auto-sync portfolio_data.db from Stream
         "User-Agent": "Streamlit-Portfolio-Tracker",
     }
 
-    # Check if file already exists in GitHub to obtain its current `sha`
     sha = None
     try:
         get_req = urllib.request.Request(f"{api_url}?ref={branch}", headers=headers)
@@ -381,12 +401,54 @@ def get_connection() -> sqlite3.Connection:
             category TEXT DEFAULT 'Uncategorized',
             sector TEXT DEFAULT 'Other',
             current_price REAL DEFAULT 0.0,
+            remarks TEXT DEFAULT '',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cur.execute("PRAGMA table_info(stock_metadata)")
+    meta_cols = {row[1] for row in cur.fetchall()}
+    if "remarks" not in meta_cols:
+        conn.execute("ALTER TABLE stock_metadata ADD COLUMN remarks TEXT DEFAULT ''")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_settings (
+            setting_key TEXT PRIMARY KEY,
+            setting_val TEXT
         )
         """
     )
     conn.commit()
     return conn
+
+
+def get_app_setting(key: str, default_val: float) -> float:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT setting_val FROM app_settings WHERE setting_key = ?", (key,))
+    row = cur.fetchone()
+    if row is not None:
+        try:
+            return float(row[0])
+        except Exception:
+            return default_val
+    return default_val
+
+
+def set_app_setting(key: str, val: float, sync_github: bool = True) -> None:
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO app_settings (setting_key, setting_val)
+        VALUES (?, ?)
+        ON CONFLICT(setting_key) DO UPDATE SET setting_val = excluded.setting_val
+        """,
+        (key, str(val)),
+    )
+    conn.commit()
+    if sync_github:
+        push_db_to_github("Update concentration alert limits")
 
 
 def load_transactions() -> pd.DataFrame:
@@ -406,13 +468,16 @@ def load_transactions() -> pd.DataFrame:
 def load_stock_metadata() -> dict[str, dict]:
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT stock_name, ticker, category, sector, current_price FROM stock_metadata")
+    cur.execute(
+        "SELECT stock_name, ticker, category, sector, current_price, COALESCE(remarks, '') FROM stock_metadata"
+    )
     return {
         row[0]: {
             "ticker": row[1],
             "category": row[2],
             "sector": row[3],
             "current_price": float(row[4] or 0.0),
+            "remarks": str(row[5] or ""),
         }
         for row in cur.fetchall()
     }
@@ -424,12 +489,13 @@ def upsert_stock_metadata(
     category: str | None = None,
     sector: str | None = None,
     current_price: float | None = None,
+    remarks: str | None = None,
     sync_github: bool = True,
 ) -> None:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT ticker, category, sector, current_price FROM stock_metadata WHERE stock_name = ?",
+        "SELECT ticker, category, sector, current_price, COALESCE(remarks, '') FROM stock_metadata WHERE stock_name = ?",
         (stock_name,),
     )
     existing = cur.fetchone()
@@ -438,25 +504,28 @@ def upsert_stock_metadata(
         cat = category if category is not None else existing[1]
         sec = sector if sector is not None else existing[2]
         px = float(current_price) if current_price is not None else float(existing[3] or 0.0)
+        rem = remarks if remarks is not None else str(existing[4] or "")
     else:
         default_cat, default_sec = lookup_symbol_metadata(stock_name)
         tkr = ticker if ticker is not None else f"{stock_name.upper()}.NS"
         cat = category if category is not None else default_cat
         sec = sector if sector is not None else default_sec
         px = float(current_price) if current_price is not None else 0.0
+        rem = remarks if remarks is not None else ""
 
     conn.execute(
         """
-        INSERT INTO stock_metadata (stock_name, ticker, category, sector, current_price, updated_at)
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO stock_metadata (stock_name, ticker, category, sector, current_price, remarks, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(stock_name) DO UPDATE SET
             ticker = excluded.ticker,
             category = excluded.category,
             sector = excluded.sector,
             current_price = excluded.current_price,
+            remarks = excluded.remarks,
             updated_at = CURRENT_TIMESTAMP
         """,
-        (stock_name, tkr, cat, sec, px),
+        (stock_name, tkr, cat, sec, px, rem),
     )
     if category is not None and sector is not None:
         conn.execute(
@@ -465,7 +534,7 @@ def upsert_stock_metadata(
         )
     conn.commit()
     if sync_github:
-        push_db_to_github("Update stock metadata in portfolio_data.db")
+        push_db_to_github("Update stock metadata / remarks in portfolio_data.db")
 
 
 def lookup_symbol_metadata(symbol: str) -> tuple[str, str]:
@@ -603,7 +672,6 @@ def delete_transaction(tx_id: int) -> None:
     push_db_to_github(f"Delete transaction #{tx_id}")
 
 
-# -----------------------------------------------
 # ---------------------------------------------------------------------------
 # Zerodha Kite Tradebook Parser & Intraday Filter (Fixed)
 # ---------------------------------------------------------------------------
@@ -851,6 +919,7 @@ def compute_fifo_portfolio(
         sec = meta.get("sector") or grp["sector"].iloc[-1] or default_sec
         tkr = meta.get("ticker") or grp["ticker"].iloc[-1] or f"{stock_key}.NS"
         cached_cmp = float(meta.get("current_price") or 0.0)
+        remarks_txt = str(meta.get("remarks") or "")
 
         if total_sold_qty > 0:
             realized_rows.append(
@@ -893,6 +962,7 @@ def compute_fifo_portfolio(
                     "pnl_rs": round(unrealized_pnl, 2),
                     "pnl_pct": round(unrealized_pnl_pct, 2),
                     "realized_pnl": round(realized_pnl, 2),
+                    "remarks": remarks_txt,
                     "first_buy_date": first_buy_date or "",
                     "last_tx_date": last_tx_date or "",
                     "tx_count": len(grp),
@@ -1014,7 +1084,6 @@ def generate_sample_kite_tradebook_df() -> pd.DataFrame:
 # Main Application UI
 # ---------------------------------------------------------------------------
 def main():
-    # Automatically restore portfolio_data.db from GitHub if container just woke up
     restore_db_from_github_if_needed()
 
     st.title("📈 Stock Portfolio Tracker (Zerodha Kite & Google Sheets)")
@@ -1032,7 +1101,6 @@ def main():
     meta_map = load_stock_metadata()
     consolidated_df, realized_df = compute_fifo_portfolio(tx_df, meta_map)
 
-    # Top Navigation Tabs
     tab_dash, tab_kite, tab_add, tab_rebalance, tab_history = st.tabs(
         [
             "📊 Consolidated Dashboard",
@@ -1082,6 +1150,7 @@ def main():
             cashflows.append((date.today(), float(total_current)))
             xirr_val = calculate_xirr(cashflows)
 
+            # Top KPI Cards
             k1, k2, k3, k4 = st.columns(4)
             k1.metric(
                 "Current Active Invested",
@@ -1105,6 +1174,79 @@ def main():
                 f"{top_stock['allocation_pct']:.1f}% of portfolio",
             )
 
+            # -----------------------------------------------------------------
+            # USER-CONFIGURABLE STOCK & SECTOR CONCENTRATION WARNING SYSTEM
+            # -----------------------------------------------------------------
+            st.subheader("🚨 Portfolio Concentration Risk Monitor")
+            saved_stock_lim = get_app_setting("stock_conc_limit", 15.0)
+            saved_sector_lim = get_app_setting("sector_conc_limit", 30.0)
+
+            lim_c1, lim_c2, lim_c3 = st.columns([2, 2, 1])
+            with lim_c1:
+                stock_limit_pct = st.slider(
+                    "Max Single-Stock Limit (%)",
+                    min_value=2.0,
+                    max_value=50.0,
+                    value=float(saved_stock_lim),
+                    step=1.0,
+                    help="Trigger a warning if any single stock exceeds this % of your total invested capital.",
+                )
+            with lim_c2:
+                sector_limit_pct = st.slider(
+                    "Max Single-Sector Limit (%)",
+                    min_value=5.0,
+                    max_value=80.0,
+                    value=float(saved_sector_lim),
+                    step=1.0,
+                    help="Trigger a warning if any single sector exceeds this % of your total invested capital.",
+                )
+            with lim_c3:
+                st.write("")
+                if st.button("💾 Save Limits", use_container_width=True):
+                    set_app_setting("stock_conc_limit", stock_limit_pct, sync_github=False)
+                    set_app_setting("sector_conc_limit", sector_limit_pct, sync_github=True)
+                    st.toast("Saved concentration limits!", icon="✅")
+
+            breached_stocks = consolidated_df[consolidated_df["allocation_pct"] > stock_limit_pct]
+            sector_agg = (
+                consolidated_df.groupby("sector", as_index=False)["invested_rs"].sum()
+            )
+            sector_agg["sector_pct"] = (
+                sector_agg["invested_rs"] / total_invested * 100.0 if total_invested > 0 else 0.0
+            )
+            breached_sectors = sector_agg[sector_agg["sector_pct"] > sector_limit_pct].sort_values(
+                "sector_pct", ascending=False
+            )
+
+            if breached_stocks.empty and breached_sectors.empty:
+                st.success(
+                    f"✅ All holdings are within your safe concentration limits (Stock ≤ {stock_limit_pct:.0f}%, Sector ≤ {sector_limit_pct:.0f}%)."
+                )
+            else:
+                w_col1, w_col2 = st.columns(2)
+                with w_col1:
+                    if not breached_stocks.empty:
+                        for _, srow in breached_stocks.iterrows():
+                            excess_pct = srow["allocation_pct"] - stock_limit_pct
+                            excess_rs = (excess_pct / 100.0) * total_invested
+                            st.warning(
+                                f"⚠️ **Stock Limit Breached — `{srow['stock_name']}`**: Holds **{srow['allocation_pct']:.1f}%** "
+                                f"({format_inr(srow['invested_rs'])}), which is **+{excess_pct:.1f}%** ({format_inr(excess_rs)}) above your **{stock_limit_pct:.0f}%** cap."
+                            )
+                    else:
+                        st.info(f"✅ No single stock exceeds {stock_limit_pct:.0f}%.")
+                with w_col2:
+                    if not breached_sectors.empty:
+                        for _, secrow in breached_sectors.iterrows():
+                            excess_pct = secrow["sector_pct"] - sector_limit_pct
+                            excess_rs = (excess_pct / 100.0) * total_invested
+                            st.error(
+                                f"🚨 **Sector Limit Breached — `{secrow['sector']}`**: Holds **{secrow['sector_pct']:.1f}%** "
+                                f"({format_inr(secrow['invested_rs'])}), which is **+{excess_pct:.1f}%** ({format_inr(excess_rs)}) above your **{sector_limit_pct:.0f}%** cap."
+                            )
+                    else:
+                        st.info(f"✅ No single sector exceeds {sector_limit_pct:.0f}%.")
+
             uncat_stocks = consolidated_df[
                 (consolidated_df["category"] == "Uncategorized") | (consolidated_df["sector"] == "Other")
             ]
@@ -1113,6 +1255,9 @@ def main():
                     f"💡 **{len(uncat_stocks)} stock(s)** ({', '.join(uncat_stocks['stock_name'].head(5))}) need Sector / Market Cap tags. Open the **🏷️ Sector/Cap Tags & Live Prices** tab to auto-fetch them via Yahoo Finance or tag them in one click."
                 )
 
+            # -----------------------------------------------------------------
+            # PIE CHARTS: SECTOR & MARKET CAP ALLOCATION
+            # -----------------------------------------------------------------
             st.subheader("🥧 Allocation Pie Charts (Sector & Market Cap)")
             chart_col1, chart_col2 = st.columns(2)
 
@@ -1136,8 +1281,9 @@ def main():
                     hovertemplate="<b>%{label}</b><br>Invested: ₹%{value:,.2f}<br>Share: %{percent}<extra></extra>",
                 )
                 fig_sector.update_layout(
+                    height=380,
                     margin=dict(t=45, b=20, l=10, r=10),
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="center", x=0.5),
                 )
                 st.plotly_chart(fig_sector, use_container_width=True)
 
@@ -1170,12 +1316,20 @@ def main():
                     hovertemplate="<b>%{label}</b><br>Invested: ₹%{value:,.2f}<br>Share: %{percent}<extra></extra>",
                 )
                 fig_cap.update_layout(
+                    height=380,
                     margin=dict(t=45, b=20, l=10, r=10),
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="center", x=0.5),
                 )
                 st.plotly_chart(fig_cap, use_container_width=True)
 
-            st.subheader("📋 Consolidated Current Portfolio Holdings (FIFO Adjusted)")
+            # -----------------------------------------------------------------
+            # CONSOLIDATED CURRENT PORTFOLIO TABLE (FROZEN STOCK NAME + REMARKS)
+            # -----------------------------------------------------------------
+            st.subheader("📋 Consolidated Current Portfolio Holdings (Frozen Stock Column & Action Remarks)")
+            st.caption(
+                "📌 **Stock Name** is frozen on the left when scrolling horizontally on mobile. Double-click any cell in the **Remarks (Future Action)** column at the far right to type notes, then click **💾 Save Remarks**."
+            )
+
             f_col1, f_col2, f_col3 = st.columns([2, 2, 2])
             with f_col1:
                 selected_caps = st.multiselect(
@@ -1204,74 +1358,453 @@ def main():
                     filtered_cons["stock_name"].str.contains(search_stock.strip(), case=False, na=False)
                 ]
 
+            # Setting 'Stock Name' as the DataFrame index pins/freezes it on the left across all Streamlit versions!
             display_df = pd.DataFrame(
                 {
                     "Stock Name": filtered_cons["stock_name"],
                     "Category": filtered_cons["category"],
                     "Sector": filtered_cons["sector"],
                     "Current Qty": filtered_cons["total_qty"].round(2),
-                    "FIFO Avg. Buy Price (₹)": filtered_cons["avg_price"].round(2),
+                    "FIFO Avg. Price (₹)": filtered_cons["avg_price"].round(2),
                     "Invested Rs. (₹)": filtered_cons["invested_rs"].round(2),
-                    "% of Total Investment": filtered_cons["allocation_pct"].round(2),
+                    "% of Portfolio": filtered_cons["allocation_pct"].round(2),
                     "CMP (₹)": filtered_cons["cmp"].round(2),
                     "Current Value (₹)": filtered_cons["current_value"].round(2),
+                    "Unrealized P&L (₹)": filtered_cons["pnl_rs"].round(2),
                     "Unrealized P&L (%)": filtered_cons["pnl_pct"].round(2),
+                    "Remarks (Future Action)": filtered_cons["remarks"].fillna(""),
                 }
-            )
+            ).set_index("Stock Name")
 
-            st.dataframe(
+            readonly_cols = [
+                "Category",
+                "Sector",
+                "Current Qty",
+                "FIFO Avg. Price (₹)",
+                "Invested Rs. (₹)",
+                "% of Portfolio",
+                "CMP (₹)",
+                "Current Value (₹)",
+                "Unrealized P&L (₹)",
+                "Unrealized P&L (%)",
+            ]
+
+            edited_dashboard_df = st.data_editor(
                 display_df,
                 use_container_width=True,
-                hide_index=True,
+                hide_index=False,  # Keeps 'Stock Name' index visible & frozen on the left!
+                disabled=readonly_cols,
                 column_config={
-                    "FIFO Avg. Buy Price (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                    "FIFO Avg. Price (₹)": st.column_config.NumberColumn(format="₹%.2f"),
                     "Invested Rs. (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-                    "% of Total Investment": st.column_config.ProgressColumn(
+                    "% of Portfolio": st.column_config.ProgressColumn(
                         format="%.2f%%",
                         min_value=0,
                         max_value=float(max(consolidated_df["allocation_pct"].max(), 10.0)),
                     ),
                     "CMP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
                     "Current Value (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                    "Unrealized P&L (₹)": st.column_config.NumberColumn(format="₹%+.2f"),
                     "Unrealized P&L (%)": st.column_config.NumberColumn(format="%+.2f%%"),
+                    "Remarks (Future Action)": st.column_config.TextColumn(
+                        "Remarks (Future Action)",
+                        help="Add action notes (e.g., 'Buy more below ₹1,500', 'Book partial profit at ₹2,000')",
+                        width="large",
+                    ),
                 },
+                key="dashboard_holdings_editor",
             )
 
-            st.subheader("📈 Stock Allocation Weights & Monthly Net Deployment")
-            b_col1, b_col2 = st.columns(2)
-            with b_col1:
-                fig_bar = px.bar(
-                    consolidated_df.sort_values("allocation_pct", ascending=True),
-                    x="allocation_pct",
-                    y="stock_name",
-                    color="category",
-                    orientation="h",
-                    title="Current Stock Weight (% of Active Portfolio)",
-                    labels={"allocation_pct": "Portfolio Share (%)", "stock_name": "Stock"},
-                    text=consolidated_df.sort_values("allocation_pct", ascending=True)[
-                        "allocation_pct"
-                    ].apply(lambda x: f"{x:.1f}%"),
-                )
-                fig_bar.update_layout(margin=dict(t=45, b=20, l=10, r=20), yaxis_title="")
-                st.plotly_chart(fig_bar, use_container_width=True)
+            if st.button("💾 Save Remarks / Future Action Notes", type="primary"):
+                for sname, row_val in edited_dashboard_df.iterrows():
+                    upsert_stock_metadata(
+                        stock_name=str(sname),
+                        remarks=str(row_val["Remarks (Future Action)"] or "").strip(),
+                        sync_github=False,
+                    )
+                push_db_to_github("Save stock remarks / future action notes")
+                st.success("✅ Saved your Remarks / Future Action notes!")
+                st.rerun()
 
-            with b_col2:
-                monthly_buys = (
-                    tx_df[tx_df["tx_type"] == "BUY"]
-                    .groupby(["month", "category"], as_index=False)["invested_rs"]
+            # -----------------------------------------------------------------
+            # UNREALIZED P&L GRAPH (DEDICATED VISUALIZATION)
+            # -----------------------------------------------------------------
+            st.divider()
+            st.subheader("📊 Unrealized Profit & Loss (P&L) Visualizer")
+            pnl_metric_mode = st.radio(
+                "Select Unrealized P&L View",
+                options=[
+                    "💵 Unrealized P&L in Rupees (₹) — Gainers vs. Losers",
+                    "📈 Unrealized P&L in Percentage (%) — Return per Stock",
+                    "⚖️ Invested Capital vs. Current Value per Stock",
+                ],
+                horizontal=True,
+            )
+
+            pnl_sorted = consolidated_df.copy()
+            if pnl_metric_mode.startswith("💵"):
+                pnl_sorted = pnl_sorted.sort_values("pnl_rs", ascending=True)
+                colors = ["#16a34a" if v >= 0 else "#dc2626" for v in pnl_sorted["pnl_rs"]]
+                fig_pnl = go.Figure(
+                    go.Bar(
+                        x=pnl_sorted["pnl_rs"],
+                        y=pnl_sorted["stock_name"],
+                        orientation="h",
+                        marker_color=colors,
+                        text=[f"₹{v:+,.0f} ({p:+.1f}%)" for v, p in zip(pnl_sorted["pnl_rs"], pnl_sorted["pnl_pct"])],
+                        textposition="outside",
+                        hovertemplate="<b>%{y}</b><br>Unrealized P&L: ₹%{x:+,.2f}<extra></extra>",
+                    )
+                )
+                fig_pnl.update_layout(
+                    title="Stock-Wise Unrealized Profit / Loss (₹)",
+                    xaxis_title="Unrealized P&L (₹)",
+                    yaxis_title="",
+                    height=max(360, len(pnl_sorted) * 32 + 90),
+                    margin=dict(t=45, b=30, l=10, r=80),
+                )
+                fig_pnl.add_vline(x=0, line_width=1.5, line_dash="dash", line_color="gray")
+                st.plotly_chart(fig_pnl, use_container_width=True)
+
+            elif pnl_metric_mode.startswith("📈"):
+                pnl_sorted = pnl_sorted.sort_values("pnl_pct", ascending=True)
+                colors = ["#16a34a" if v >= 0 else "#dc2626" for v in pnl_sorted["pnl_pct"]]
+                fig_pnl = go.Figure(
+                    go.Bar(
+                        x=pnl_sorted["pnl_pct"],
+                        y=pnl_sorted["stock_name"],
+                        orientation="h",
+                        marker_color=colors,
+                        text=[f"{p:+.1f}% (₹{v:+,.0f})" for v, p in zip(pnl_sorted["pnl_rs"], pnl_sorted["pnl_pct"])],
+                        textposition="outside",
+                        hovertemplate="<b>%{y}</b><br>Return: %{x:+.2f}%<extra></extra>",
+                    )
+                )
+                fig_pnl.update_layout(
+                    title="Stock-Wise Unrealized Return (%)",
+                    xaxis_title="Unrealized P&L (%)",
+                    yaxis_title="",
+                    height=max(360, len(pnl_sorted) * 32 + 90),
+                    margin=dict(t=45, b=30, l=10, r=80),
+                )
+                fig_pnl.add_vline(x=0, line_width=1.5, line_dash="dash", line_color="gray")
+                st.plotly_chart(fig_pnl, use_container_width=True)
+
+            else:
+                pnl_sorted = pnl_sorted.sort_values("invested_rs", ascending=False)
+                fig_pnl = go.Figure()
+                fig_pnl.add_trace(
+                    go.Bar(
+                        name="Invested Capital (₹)",
+                        x=pnl_sorted["stock_name"],
+                        y=pnl_sorted["invested_rs"],
+                        marker_color="#3b82f6",
+                    )
+                )
+                fig_pnl.add_trace(
+                    go.Bar(
+                        name="Current Market Value (₹)",
+                        x=pnl_sorted["stock_name"],
+                        y=pnl_sorted["current_value"],
+                        marker_color="#10b981",
+                    )
+                )
+                fig_pnl.update_layout(
+                    barmode="group",
+                    title="Invested Capital vs. Current Market Value per Stock (₹)",
+                    xaxis_title="Stock",
+                    yaxis_title="Amount (₹)",
+                    height=420,
+                    margin=dict(t=45, b=40, l=10, r=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig_pnl, use_container_width=True)
+
+            # -----------------------------------------------------------------
+            # REDESIGNED FULL-WIDTH MONTH-WISE INVESTMENT VISUALIZER
+            # -----------------------------------------------------------------
+            st.divider()
+            st.subheader("🗓️ Month-Wise Investment & Cumulative Portfolio Growth")
+            st.caption(
+                "Full-width chronological view of your monthly capital deployment (replacing the small half-column bar chart)."
+            )
+
+            tx_chrono = tx_df.copy()
+            tx_chrono["dt"] = pd.to_datetime(tx_chrono["tx_date"], errors="coerce").fillna(
+                pd.Timestamp("2024-01-01")
+            )
+            tx_chrono["ym_sort"] = tx_chrono["dt"].dt.strftime("%Y-%m")
+            tx_chrono["month_label"] = tx_chrono["dt"].dt.strftime("%b %Y")
+            tx_chrono["year_num"] = tx_chrono["dt"].dt.year
+            tx_chrono["month_num"] = tx_chrono["dt"].dt.month
+            tx_chrono["month_short"] = tx_chrono["dt"].dt.strftime("%b")
+
+            month_chart_type = st.radio(
+                "Select Monthly Chart Style",
+                options=[
+                    "📈 Combo Chart: Monthly Buy/Sell Bars + Cumulative Net Invested Line",
+                    "🟩 Year × Month Investment Heatmap (Calendar Matrix)",
+                    "📊 Category-Stacked Monthly Purchases (Large / Mid / Small Cap)",
+                ],
+                horizontal=True,
+            )
+
+            if month_chart_type.startswith("📈"):
+                m_Pivot = (
+                    tx_chrono.groupby(["ym_sort", "month_label", "tx_type"], as_index=False)["invested_rs"]
                     .sum()
                 )
-                fig_month = px.bar(
-                    monthly_buys,
-                    x="month",
+                months_order = (
+                    m_Pivot[["ym_sort", "month_label"]]
+                    .drop_duplicates()
+                    .sort_values("ym_sort")
+                )
+                buy_map = m_Pivot[m_Pivot["tx_type"] == "BUY"].set_index("ym_sort")["invested_rs"].to_dict()
+                sell_map = m_Pivot[m_Pivot["tx_type"] == "SELL"].set_index("ym_sort")["invested_rs"].to_dict()
+
+                months_order["bought_rs"] = months_order["ym_sort"].map(lambda k: buy_map.get(k, 0.0))
+                months_order["sold_rs"] = months_order["ym_sort"].map(lambda k: sell_map.get(k, 0.0))
+                months_order["net_invested"] = months_order["bought_rs"] - months_order["sold_rs"]
+                months_order["cumulative_invested"] = months_order["net_invested"].cumsum()
+
+                fig_m = go.Figure()
+                fig_m.add_trace(
+                    go.Bar(
+                        x=months_order["month_label"],
+                        y=months_order["bought_rs"],
+                        name="Monthly Bought (₹)",
+                        marker_color="#2563eb",
+                        hovertemplate="<b>%{x}</b><br>Bought: ₹%{y:,.0f}<extra></extra>",
+                    )
+                )
+                if months_order["sold_rs"].sum() > 0:
+                    fig_m.add_trace(
+                        go.Bar(
+                            x=months_order["month_label"],
+                            y=months_order["sold_rs"],
+                            name="Monthly Sold (₹)",
+                            marker_color="#f97316",
+                            hovertemplate="<b>%{x}</b><br>Sold: ₹%{y:,.0f}<extra></extra>",
+                        )
+                    )
+                fig_m.add_trace(
+                    go.Scatter(
+                        x=months_order["month_label"],
+                        y=months_order["cumulative_invested"],
+                        name="Cumulative Net Deployed (₹)",
+                        mode="lines+markers",
+                        line=dict(color="#10b981", width=3),
+                        yaxis="y2",
+                        hovertemplate="<b>%{x}</b><br>Cumulative Deployed: ₹%{y:,.0f}<extra></extra>",
+                    )
+                )
+                fig_m.update_layout(
+                    title="Monthly Capital Bought / Sold (Bars) & Cumulative Net Investment (Line)",
+                    xaxis=dict(title="Month", tickangle=-35),
+                    yaxis=dict(title="Monthly Trade Value (₹)"),
+                    yaxis2=dict(
+                        title="Cumulative Deployed (₹)",
+                        overlaying="y",
+                        side="right",
+                        showgrid=False,
+                    ),
+                    barmode="group",
+                    height=450,
+                    margin=dict(t=55, b=70, l=20, r=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig_m, use_container_width=True)
+
+            elif month_chart_type.startswith("🟩"):
+                buys_only = tx_chrono[tx_chrono["tx_type"] == "BUY"].copy()
+                if buys_only.empty:
+                    st.info("No BUY transactions available for heatmap.")
+                else:
+                    all_months_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                    heat_piv = (
+                        buys_only.pivot_table(
+                            index="year_num",
+                            columns="month_short",
+                            values="invested_rs",
+                            aggfunc="sum",
+                            fill_value=0.0,
+                        )
+                        .reindex(columns=all_months_names, fill_value=0.0)
+                        .sort_index(ascending=False)
+                    )
+                    fig_heat = px.imshow(
+                        heat_piv,
+                        text_auto=".3s",
+                        aspect="auto",
+                        color_continuous_scale="Blues",
+                        labels=dict(x="Month", y="Year", color="Invested (₹)"),
+                        title="Year × Month Purchase Heatmap (₹ Invested per Month)",
+                    )
+                    fig_heat.update_layout(height=max(300, len(heat_piv) * 65 + 120), margin=dict(t=50, b=30, l=20, r=20))
+                    st.plotly_chart(fig_heat, use_container_width=True)
+
+            else:
+                m_cat = (
+                    tx_chrono[tx_chrono["tx_type"] == "BUY"]
+                    .groupby(["ym_sort", "month_label", "category"], as_index=False)["invested_rs"]
+                    .sum()
+                    .sort_values("ym_sort")
+                )
+                month_cat_order = m_cat.drop_duplicates("ym_sort")["month_label"].tolist()
+                fig_mc = px.bar(
+                    m_cat,
+                    x="month_label",
                     y="invested_rs",
                     color="category",
-                    title="Month-Wise Delivery Purchases (₹)",
-                    labels={"invested_rs": "Bought (₹)", "month": "Month"},
+                    title="Month-Wise Delivery Purchases by Market Cap Category (₹)",
+                    labels={"invested_rs": "Invested (₹)", "month_label": "Month"},
+                    category_orders={"month_label": month_cat_order},
                     barmode="stack",
                 )
-                fig_month.update_layout(margin=dict(t=45, b=20, l=10, r=10))
-                st.plotly_chart(fig_month, use_container_width=True)
+                fig_mc.update_layout(
+                    height=440,
+                    xaxis_tickangle=-35,
+                    margin=dict(t=50, b=70, l=20, r=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig_mc, use_container_width=True)
+
+            # -----------------------------------------------------------------
+            # PERIOD FILTER (MONTH / YEAR / DATE RANGE) -> BOUGHT & SOLD BY STOCK
+            # -----------------------------------------------------------------
+            st.divider()
+            st.subheader("📅 Period Activity Explorer (Filter Bought & Sold Value by Year, Month, or Date Range)")
+            st.caption(
+                "Filter your trade history by Year, Month, or exact Date Range to see how much you bought and sold in each stock during that period."
+            )
+
+            min_tx_date = tx_chrono["dt"].min().date()
+            max_tx_date = tx_chrono["dt"].max().date()
+            avail_years = sorted(tx_chrono["year_num"].unique().tolist(), reverse=True)
+            month_names_list = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+            pf1, pf2, pf3 = st.columns([1.5, 1.5, 2])
+            with pf1:
+                sel_years = st.multiselect(
+                    "Filter by Year(s)",
+                    options=avail_years,
+                    default=[],
+                    placeholder="All Years",
+                )
+            with pf2:
+                sel_months = st.multiselect(
+                    "Filter by Month(s)",
+                    options=month_names_list,
+                    default=[],
+                    placeholder="All Months (Jan–Dec)",
+                )
+            with pf3:
+                date_range_sel = st.date_input(
+                    "Or Filter by Custom Date Range",
+                    value=(min_tx_date, max_tx_date),
+                    min_value=min_tx_date,
+                    max_value=max_tx_date,
+                )
+
+            period_df = tx_chrono.copy()
+            if sel_years:
+                period_df = period_df[period_df["year_num"].isin(sel_years)]
+            if sel_months:
+                period_df = period_df[period_df["month_short"].isin(sel_months)]
+            if isinstance(date_range_sel, (list, tuple)) and len(date_range_sel) == 2:
+                start_d, end_d = date_range_sel[0], date_range_sel[1]
+                period_df = period_df[(period_df["dt"].dt.date >= start_d) & (period_df["dt"].dt.date <= end_d)]
+
+            if period_df.empty:
+                st.warning("No transactions match the selected Month / Year / Date Range filter.")
+            else:
+                tot_bought_period = period_df.loc[period_df["tx_type"] == "BUY", "invested_rs"].sum()
+                tot_sold_period = period_df.loc[period_df["tx_type"] == "SELL", "invested_rs"].sum()
+                net_period = tot_bought_period - tot_sold_period
+
+                pk1, pk2, pk3, pk4 = st.columns(4)
+                pk1.metric("Period Total Bought", format_inr(tot_bought_period))
+                pk2.metric("Period Total Sold", format_inr(tot_sold_period))
+                pk3.metric("Period Net Invested", format_inr(net_period))
+                pk4.metric("Transactions in Period", f"{len(period_df)} Trades", f"{period_df['stock_name'].nunique()} Stocks")
+
+                # Stock-wise Bought & Sold Breakdown for the Filtered Period
+                stock_period_rows = []
+                for sname, sgrp in period_df.groupby("stock_name"):
+                    b_grp = sgrp[sgrp["tx_type"] == "BUY"]
+                    s_grp = sgrp[sgrp["tx_type"] == "SELL"]
+                    b_qty = b_grp["qty"].sum()
+                    b_val = b_grp["invested_rs"].sum()
+                    b_avg = (b_val / b_qty) if b_qty > 0 else 0.0
+
+                    s_qty = s_grp["qty"].sum()
+                    s_val = s_grp["invested_rs"].sum()
+                    s_avg = (s_val / s_qty) if s_qty > 0 else 0.0
+
+                    stock_period_rows.append(
+                        {
+                            "Stock Name": sname,
+                            "Category": sgrp["category"].iloc[-1],
+                            "Sector": sgrp["sector"].iloc[-1],
+                            "Bought Qty": round(b_qty, 2),
+                            "Avg. Buy Price (₹)": round(b_avg, 2),
+                            "Bought Value (₹)": round(b_val, 2),
+                            "Sold Qty": round(s_qty, 2),
+                            "Avg. Sell Price (₹)": round(s_avg, 2),
+                            "Sold Value (₹)": round(s_val, 2),
+                            "Net Invested in Period (₹)": round(b_val - s_val, 2),
+                        }
+                    )
+
+                stock_period_df = (
+                    pd.DataFrame(stock_period_rows)
+                    .sort_values("Bought Value (₹)", ascending=False)
+                    .set_index("Stock Name")
+                )
+
+                st.dataframe(
+                    stock_period_df,
+                    use_container_width=True,
+                    hide_index=False,
+                    column_config={
+                        "Avg. Buy Price (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                        "Bought Value (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                        "Avg. Sell Price (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                        "Sold Value (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+                        "Net Invested in Period (₹)": st.column_config.NumberColumn(format="₹%+.2f"),
+                    },
+                )
+
+                # Visual Bought vs Sold chart for the selected period
+                plot_p_df = stock_period_df.reset_index()
+                fig_period = go.Figure()
+                fig_period.add_trace(
+                    go.Bar(
+                        name="Bought Value (₹)",
+                        x=plot_p_df["Stock Name"],
+                        y=plot_p_df["Bought Value (₹)"],
+                        marker_color="#2563eb",
+                    )
+                )
+                if plot_p_df["Sold Value (₹)"].sum() > 0:
+                    fig_period.add_trace(
+                        go.Bar(
+                            name="Sold Value (₹)",
+                            x=plot_p_df["Stock Name"],
+                            y=plot_p_df["Sold Value (₹)"],
+                            marker_color="#f97316",
+                        )
+                    )
+                fig_period.update_layout(
+                    barmode="group",
+                    title="Stock-Wise Bought vs. Sold Value in Selected Period (₹)",
+                    xaxis_title="Stock",
+                    yaxis_title="Amount (₹)",
+                    height=380,
+                    margin=dict(t=45, b=40, l=10, r=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig_period, use_container_width=True)
 
     # =========================================================================
     # TAB 2: IMPORT ZERODHA KITE TRADEBOOK OR GOOGLE SHEET
@@ -1544,13 +2077,14 @@ def main():
                     "Sector": consolidated_df["sector"],
                     "FIFO Avg. Price (₹)": consolidated_df["avg_price"].round(2),
                     "Current Market Price (₹)": consolidated_df["cmp"].round(2),
+                    "Remarks": consolidated_df["remarks"].fillna(""),
                 }
-            )
+            ).set_index("Stock Name")
 
             edited_meta = st.data_editor(
                 edit_meta_df,
-                disabled=["Stock Name", "FIFO Avg. Price (₹)"],
-                hide_index=True,
+                disabled=["FIFO Avg. Price (₹)"],
+                hide_index=False,
                 use_container_width=True,
                 column_config={
                     "Category": st.column_config.SelectboxColumn(
@@ -1561,18 +2095,19 @@ def main():
                 key="meta_editor_grid",
             )
 
-            if st.button("💾 Save Sector, Market Cap & CMP Changes"):
-                for _, r in edited_meta.iterrows():
+            if st.button("💾 Save Sector, Market Cap, CMP & Remarks Changes"):
+                for sname, r in edited_meta.iterrows():
                     upsert_stock_metadata(
-                        stock_name=r["Stock Name"],
+                        stock_name=str(sname),
                         ticker=str(r["Yahoo Ticker"]).strip().upper(),
                         category=str(r["Category"]).strip(),
                         sector=str(r["Sector"]).strip().title(),
                         current_price=float(r["Current Market Price (₹)"]),
+                        remarks=str(r["Remarks"] or "").strip(),
                         sync_github=False,
                     )
-                push_db_to_github("Save updated stock sector/cap tags")
-                st.success("Saved! Your Sector and Market Cap Pie Charts are now updated.")
+                push_db_to_github("Save updated stock sector/cap tags and remarks")
+                st.success("Saved! Your Sector and Market Cap Pie Charts and Remarks are now updated.")
                 st.rerun()
 
             st.divider()
@@ -1636,7 +2171,7 @@ def main():
                 manual_repo = st.text_input(
                     "GitHub Repo (`username/repo`)",
                     value=gh_repo,
-                    placeholder="e.g. ramesh/my-stock-tracker",
+                    placeholder="e.g. ramesh/portfolio_tracker1",
                 )
             with g2:
                 manual_token = st.text_input(
@@ -1674,9 +2209,9 @@ def main():
                         "realized_pnl": "Realized P&L (₹)",
                         "realized_pnl_pct": "Realized Return (%)",
                     }
-                ),
+                ).set_index("Stock Name"),
                 use_container_width=True,
-                hide_index=True,
+                hide_index=False,
             )
             st.divider()
 

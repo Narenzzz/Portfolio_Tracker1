@@ -603,8 +603,9 @@ def delete_transaction(tx_id: int) -> None:
     push_db_to_github(f"Delete transaction #{tx_id}")
 
 
+# -----------------------------------------------
 # ---------------------------------------------------------------------------
-# Zerodha Kite Tradebook Parser & Intraday Filter
+# Zerodha Kite Tradebook Parser & Intraday Filter (Fixed)
 # ---------------------------------------------------------------------------
 def parse_kite_tradebook_files(
     uploaded_files: list,
@@ -617,30 +618,32 @@ def parse_kite_tradebook_files(
         if fname.endswith(".csv"):
             df_part = pd.read_csv(f)
         else:
-            df_raw = pd.read_excel(f)
-            if "symbol" not in [str(c).lower().strip() for c in df_raw.columns] and "tradingsymbol" not in [
-                str(c).lower().strip() for c in df_raw.columns
-            ]:
-                header_idx = None
-                for idx, r in df_raw.head(25).iterrows():
-                    row_vals = [str(v).lower().strip() for v in r.values]
-                    if ("symbol" in row_vals or "tradingsymbol" in row_vals) and "trade_date" in row_vals:
-                        header_idx = idx
-                        break
-                if header_idx is not None:
-                    df_part = df_raw.iloc[header_idx + 1 :].copy()
-                    df_part.columns = [str(v).strip() for v in df_raw.iloc[header_idx].values]
-                else:
-                    df_part = df_raw
+            df_raw = pd.read_excel(f, header=None)
+            header_idx = None
+            
+            # Scan top rows to find the exact header row dynamically
+            for idx, r in df_raw.head(25).iterrows():
+                row_vals = [str(v).lower().strip().replace(" ", "_") for v in r.values]
+                if ("symbol" in row_vals or "tradingsymbol" in row_vals) and "trade_date" in row_vals:
+                    header_idx = idx
+                    break
+            
+            if header_idx is not None:
+                df_part = df_raw.iloc[header_idx + 1 :].copy()
+                df_part.columns = [str(v).strip().lower().replace(" ", "_") for v in df_raw.iloc[header_idx].values]
             else:
-                df_part = df_raw
+                # Fallback if no metadata rows found
+                df_part = pd.read_excel(f)
+        
+        # Standardize columns immediately
+        df_part.columns = [str(c).strip().lower().replace(" ", "_") for c in df_part.columns]
         raw_frames.append(df_part)
 
     if not raw_frames:
         return pd.DataFrame(), {}
 
     combined = pd.concat(raw_frames, ignore_index=True)
-    combined.columns = [str(c).strip().lower() for c in combined.columns]
+    combined.columns = [str(c).strip().lower().replace(" ", "_") for c in combined.columns]
 
     sym_col = "symbol" if "symbol" in combined.columns else ("tradingsymbol" if "tradingsymbol" in combined.columns else None)
     if not sym_col or "trade_date" not in combined.columns or "trade_type" not in combined.columns:

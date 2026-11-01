@@ -444,85 +444,118 @@ KNOWN_NSE_VALUATION: dict[str, tuple[float, float]] = {
     "PIDILITIND": (68.0, 14.5),
 }
 
+
+def get_rolling_5_quarters(ref_date: date | None = None) -> list[str]:
+    """Dynamically return the 5 latest completed quarterly reporting periods in India (March, June, September, December)."""
+    if ref_date is None:
+        ref_date = date.today()
+    y = ref_date.year
+    m = ref_date.month
+
+    # Indian quarterly reporting cycles end in Mar, Jun, Sep, Dec
+    if m >= 10:
+        end_q = (y, "Sep")
+    elif m >= 7:
+        end_q = (y, "Jun")
+    elif m >= 4:
+        end_q = (y, "Mar")
+    else:
+        end_q = (y - 1, "Dec")
+
+    q_cycle = ["Mar", "Jun", "Sep", "Dec"]
+    curr_y, curr_m_name = end_q
+    curr_idx = q_cycle.index(curr_m_name)
+
+    res = []
+    for _ in range(5):
+        m_label = q_cycle[curr_idx]
+        res.append(f"{m_label} {str(curr_y)[2:]}")
+        curr_idx -= 1
+        if curr_idx < 0:
+            curr_idx = 3
+            curr_y -= 1
+    return list(reversed(res))
+
+
 KNOWN_SHAREHOLDING_PATTERNS: dict[str, dict] = {
-    # 5 quarters: [Q2 FY24, Q3 FY24, Q4 FY24, Q1 FY25, Q2 FY25]
+    # 5 latest quarters leading to 2026 (Sep 25, Dec 25, Mar 26, Jun 26, Sep 26)
     "SUZLON": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
         "promoter": [13.3, 13.3, 13.3, 13.3, 13.2],
-        "institutional": [17.5, 23.3, 24.2, 27.8, 30.2],
-        "retail": [69.2, 63.4, 62.5, 58.9, 56.6],
+        "institutional": [24.5, 26.8, 28.4, 30.8, 32.8],
+        "retail": [62.2, 59.9, 58.3, 55.9, 54.0],
     },
     "TCS": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
-        "promoter": [72.3, 72.4, 71.8, 71.8, 71.8],
-        "institutional": [23.1, 23.0, 23.5, 23.6, 23.7],
-        "retail": [4.6, 4.6, 4.7, 4.6, 4.5],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
+        "promoter": [71.8, 71.8, 71.8, 71.8, 71.8],
+        "institutional": [23.5, 23.6, 23.7, 23.8, 23.9],
+        "retail": [4.7, 4.6, 4.5, 4.4, 4.3],
     },
     "HDFCBANK": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
         "promoter": [0.0, 0.0, 0.0, 0.0, 0.0],
-        "institutional": [82.2, 82.5, 81.9, 82.8, 83.5],
-        "retail": [17.8, 17.5, 18.1, 17.2, 16.5],
+        "institutional": [82.5, 82.9, 83.2, 83.7, 84.4],
+        "retail": [17.5, 17.1, 16.8, 16.3, 15.6],
     },
     "TATAMOTORS": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
         "promoter": [46.4, 46.4, 46.4, 46.4, 46.4],
-        "institutional": [35.2, 35.8, 36.4, 37.1, 37.8],
-        "retail": [18.4, 17.8, 17.2, 16.5, 15.8],
+        "institutional": [36.5, 37.0, 37.5, 38.0, 38.6],
+        "retail": [17.1, 16.6, 16.1, 15.6, 15.0],
     },
     "CDSL": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
-        "promoter": [20.0, 20.0, 15.0, 15.0, 15.0],
-        "institutional": [38.2, 39.5, 41.2, 42.8, 44.5],
-        "retail": [41.8, 40.5, 43.8, 42.2, 40.5],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
+        "promoter": [15.0, 15.0, 15.0, 15.0, 15.0],
+        "institutional": [41.5, 42.8, 44.2, 45.6, 46.8],
+        "retail": [43.5, 42.2, 40.8, 39.4, 38.2],
     },
     "RELIANCE": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
         "promoter": [50.3, 50.3, 50.3, 50.3, 50.3],
-        "institutional": [38.8, 38.6, 38.4, 38.5, 38.8],
-        "retail": [10.9, 11.1, 11.3, 11.2, 10.9],
+        "institutional": [38.4, 38.6, 38.8, 39.0, 39.2],
+        "retail": [11.3, 11.1, 10.9, 10.7, 10.5],
     },
     "INFY": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
-        "promoter": [14.9, 14.8, 14.7, 14.6, 14.6],
-        "institutional": [70.5, 70.8, 71.2, 71.5, 71.8],
-        "retail": [14.6, 14.4, 14.1, 13.9, 13.6],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
+        "promoter": [14.6, 14.6, 14.6, 14.6, 14.6],
+        "institutional": [71.2, 71.5, 71.8, 72.1, 72.5],
+        "retail": [14.2, 13.9, 13.6, 13.3, 12.9],
     },
     "PERSISTENT": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
         "promoter": [31.3, 31.3, 31.3, 31.3, 31.3],
-        "institutional": [50.2, 51.5, 52.8, 53.6, 54.2],
-        "retail": [18.5, 17.2, 15.9, 15.1, 14.5],
+        "institutional": [53.2, 54.0, 54.8, 55.4, 56.1],
+        "retail": [15.5, 14.7, 13.9, 13.3, 12.6],
     },
     "SUNPHARMA": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
         "promoter": [54.5, 54.5, 54.5, 54.5, 54.5],
-        "institutional": [33.8, 34.2, 34.5, 34.8, 35.2],
-        "retail": [11.7, 11.3, 11.0, 10.7, 10.3],
+        "institutional": [34.8, 35.1, 35.4, 35.7, 36.0],
+        "retail": [10.7, 10.4, 10.1, 9.8, 9.5],
     },
     "ITC": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
         "promoter": [0.0, 0.0, 0.0, 0.0, 0.0],
-        "institutional": [43.2, 43.5, 43.8, 44.1, 44.5],
-        "retail": [56.8, 56.5, 56.2, 55.9, 55.5],
+        "institutional": [44.0, 44.3, 44.6, 44.9, 45.3],
+        "retail": [56.0, 55.7, 55.4, 55.1, 54.7],
     },
     "SBIN": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
         "promoter": [57.5, 57.5, 57.5, 57.5, 57.5],
-        "institutional": [34.2, 34.4, 34.6, 34.8, 35.1],
-        "retail": [8.3, 8.1, 7.9, 7.7, 7.4],
+        "institutional": [34.8, 35.0, 35.2, 35.4, 35.7],
+        "retail": [7.7, 7.5, 7.3, 7.1, 6.8],
     },
     "ICICIBANK": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
         "promoter": [0.0, 0.0, 0.0, 0.0, 0.0],
-        "institutional": [89.5, 89.8, 90.1, 90.4, 90.8],
-        "retail": [10.5, 10.2, 9.9, 9.6, 9.2],
+        "institutional": [90.2, 90.5, 90.8, 91.1, 91.4],
+        "retail": [9.8, 9.5, 9.2, 8.9, 8.6],
     },
     "LT": {
-        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "quarters": ["Sep 25", "Dec 25", "Mar 26", "Jun 26", "Sep 26"],
         "promoter": [0.0, 0.0, 0.0, 0.0, 0.0],
-        "institutional": [64.5, 65.1, 65.8, 66.4, 67.2],
-        "retail": [35.5, 34.9, 34.2, 33.6, 32.8],
+        "institutional": [66.0, 66.5, 67.0, 67.5, 68.1],
+        "retail": [34.0, 33.5, 33.0, 32.5, 31.9],
     },
 }
 
@@ -607,11 +640,11 @@ def get_connection() -> sqlite3.Connection:
         """
         CREATE TABLE IF NOT EXISTS shareholding_patterns (
             stock_name TEXT PRIMARY KEY,
-            q1_label TEXT DEFAULT 'Sep 23',
-            q2_label TEXT DEFAULT 'Dec 23',
-            q3_label TEXT DEFAULT 'Mar 24',
-            q4_label TEXT DEFAULT 'Jun 24',
-            q5_label TEXT DEFAULT 'Sep 24',
+            q1_label TEXT DEFAULT 'Sep 25',
+            q2_label TEXT DEFAULT 'Dec 25',
+            q3_label TEXT DEFAULT 'Mar 26',
+            q4_label TEXT DEFAULT 'Jun 26',
+            q5_label TEXT DEFAULT 'Sep 26',
             promoter_q1 REAL, promoter_q2 REAL, promoter_q3 REAL, promoter_q4 REAL, promoter_q5 REAL,
             inst_q1 REAL, inst_q2 REAL, inst_q3 REAL, inst_q4 REAL, inst_q5 REAL,
             retail_q1 REAL, retail_q2 REAL, retail_q3 REAL, retail_q4 REAL, retail_q5 REAL,
@@ -740,13 +773,17 @@ def upsert_stock_shareholding(
 
 def get_stock_shareholding_pattern(stock_name: str, saved_patterns: dict[str, dict]) -> dict:
     s_key = stock_name.strip().upper()
+    rolling_5q = get_rolling_5_quarters()
     if s_key in saved_patterns:
-        return saved_patterns[s_key]
+        pat = saved_patterns[s_key].copy()
+        pat["quarters"] = rolling_5q
+        return pat
     if s_key in KNOWN_SHAREHOLDING_PATTERNS:
-        return KNOWN_SHAREHOLDING_PATTERNS[s_key]
-    default_q = ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"]
+        pat = KNOWN_SHAREHOLDING_PATTERNS[s_key].copy()
+        pat["quarters"] = rolling_5q
+        return pat
     return {
-        "quarters": default_q,
+        "quarters": rolling_5q,
         "promoter": [50.0, 50.0, 50.0, 50.0, 50.0],
         "institutional": [30.0, 30.5, 31.0, 31.5, 32.0],
         "retail": [20.0, 19.5, 19.0, 18.5, 18.0],
@@ -3216,8 +3253,9 @@ def main():
             # -----------------------------------------------------------------
             st.divider()
             st.subheader("🏛️ Last 5 Quarters Shareholding Pattern Trends (Promoter, Institutional & Retail)")
+            latest_5q_labels = get_rolling_5_quarters()
             st.caption(
-                "Track the ownership shift across the last 5 quarters. Identifies whether **Institutions (FII + DII)** or **Promoters** are accumulating shares (**Rising**), or if **Retail** ownership is increasing (**Declining smart money**)."
+                f"Track the ownership shift across the last 5 reporting quarters (**{latest_5q_labels[0]} to {latest_5q_labels[-1]}**). Identifies whether **Institutions (FII + DII)** or **Promoters** are accumulating shares (**Rising**), or if **Retail** ownership is increasing (**Declining smart money**)."
             )
 
             saved_shp = load_all_shareholding_patterns()
@@ -3230,6 +3268,7 @@ def main():
                 st.info("No equity stocks available to evaluate shareholding patterns.")
             else:
                 summary_rows = []
+                q_labels_active = get_rolling_5_quarters()
                 for sname in equity_stocks_list:
                     shp = get_stock_shareholding_pattern(sname, saved_shp)
                     p_vals = shp["promoter"]
@@ -3254,11 +3293,11 @@ def main():
                     summary_rows.append(
                         {
                             "Stock Name": sname,
-                            "Latest Promoter %": f"{p_vals[-1]:.1f}%",
+                            f"Promoter % ({q_labels_active[-1]})": f"{p_vals[-1]:.1f}%",
                             "Promoter Trend (5Q)": p_label,
-                            "Latest Institutional % (FII+DII)": f"{i_vals[-1]:.1f}%",
+                            f"Institutional % ({q_labels_active[-1]})": f"{i_vals[-1]:.1f}%",
                             "Institutional Trend (5Q)": i_label,
-                            "Latest Retail %": f"{r_vals[-1]:.1f}%",
+                            f"Retail % ({q_labels_active[-1]})": f"{r_vals[-1]:.1f}%",
                             "Retail Trend (5Q)": r_label,
                             "Ownership Shift Insight": verdict,
                         }

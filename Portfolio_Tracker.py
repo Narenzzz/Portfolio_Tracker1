@@ -1122,49 +1122,59 @@ def fetch_benchmark_and_equity_series(
 
     qty_df = qty_df.clip(lower=0.0)
     portfolio_daily_val = (qty_df * price_df).sum(axis=1)
-    cum_invested = daily_net_cashflow.cumsum().clip(lower=1.0)
-
-    result_df = pd.DataFrame(index=all_dates)
-    result_df["Date"] = all_dates
-    result_df["Equity Invested (₹)"] = cum_invested
-    result_df["My Equity Value (₹)"] = portfolio_daily_val
-    result_df["My Equity Return (%)"] = (
-        (result_df["My Equity Value (₹)"] - result_df["Equity Invested (₹)"])
-        / result_df["Equity Invested (₹)"]
-        * 100.0
-    )
-
-    # Compute Benchmark Series (both Point-to-Point Normalized % and Equivalent Cashflow SIP Return %)
-    for b_name, b_ser in bench_series.items():
-        b_aligned = b_ser.reindex(all_dates).ffill().bfill()
-        result_df[f"{b_name}_Price"] = b_aligned
-
-        # Equivalent Cashflow Benchmark: if every rupee invested/withdrawn in stocks bought/sold units of the index
-        units_bought = (daily_net_cashflow / b_aligned).fillna(0.0)
-        cum_units = units_bought.cumsum().clip(lower=0.0)
-        eq_bench_val = cum_units * b_aligned
-        result_df[f"{b_name} Equiv Value (₹)"] = eq_bench_val
-        result_df[f"{b_name} SIP Return (%)"] = (
-            (eq_bench_val - cum_invested) / cum_invested * 100.0
-        )
 
     # Filter to requested display window [start_dt, end_dt]
-    win_df = result_df[result_df["Date"] >= start_dt.normalize()].copy()
-    if win_df.empty:
-        win_df = result_df.copy()
+    win_mask = all_dates >= start_dt.normalize()
+    win_dates = all_dates[win_mask]
+    if len(win_dates) == 0:
+        win_dates = all_dates
+        win_mask = pd.Series(True, index=all_dates)
 
-    # Point-to-Point Index Return (%) rebased to 0% at the start of the selected window
-    for b_name in bench_series.keys():
-        p_col = f"{b_name}_Price"
-        if p_col in win_df.columns:
-            base_px = float(win_df[p_col].iloc[0])
-            win_df[f"{b_name} Index Return (%)"] = (
-                ((win_df[p_col] / base_px) - 1.0) * 100.0 if base_px > 0 else 0.0
-            )
+    v_win = portfolio_daily_val[win_mask]
+    cf_win = daily_net_cashflow[win_mask].copy()
 
-    # Also compute rebased My Equity Portfolio change over the selected window
-    start_port_ret = float(win_df["My Equity Return (%)"].iloc[0])
-    win_df["My Equity Window Return (%)"] = win_df["My Equity Return (%)"] - start_port_ret
+    # Base committed capital on day 0 of the window
+    v0 = float(v_win.iloc[0])
+
+    # Cashflows during the window: day 0 has base committed capital v0, subsequent days add new cashflows
+    cf_after_t0 = cf_win.copy()
+    cf_after_t0.iloc[0] = 0.0
+    cum_k = v0 + cf_after_t0.cumsum()
+    cum_k_safe = cum_k.replace(0, np.nan).fillna(1.0)
+
+    # Daily Time-Weighted Return (TWR) for Point-to-Point mode
+    prev_v = v_win.shift(1).bfill()
+    daily_twr = np.where(prev_v > 0, (v_win - cf_after_t0 - prev_v) / prev_v, 0.0)
+    daily_twr[0] = 0.0
+    twr_series = (np.cumprod(1.0 + daily_twr) - 1.0) * 100.0
+
+    # User SIP return during window (starts at 0.0% on day 0)
+    my_sip_ret = ((v_win - cum_k) / cum_k_safe * 100.0).fillna(0.0)
+
+    win_df = pd.DataFrame(index=win_dates)
+    win_df["Date"] = win_dates
+    win_df["Equity Invested (₹)"] = cum_k
+    win_df["My Equity Value (₹)"] = v_win
+    win_df["My Equity Return (%)"] = my_sip_ret
+    win_df["My Equity TWR (%)"] = twr_series
+
+    # Benchmarks in window
+    for b_name, b_ser in bench_series.items():
+        b_aligned = b_ser.reindex(all_dates).ffill().bfill()
+        b_win = b_aligned[win_mask]
+        p0 = float(b_win.iloc[0])
+        win_df[f"{b_name}_Price"] = b_win
+
+        # Point-to-Point Index Return rebased to 0% at start of window
+        win_df[f"{b_name} Index Return (%)"] = (((b_win / p0) - 1.0) * 100.0) if p0 > 0 else 0.0
+
+        # Equivalent Cashflow SIP simulation in window (starts at 0.0% on day 0)
+        u0 = (v0 / p0) if p0 > 0 else 0.0
+        u_after = (cf_after_t0 / b_win).fillna(0.0).cumsum()
+        cum_u = u0 + u_after
+        b_val = cum_u * b_win
+        win_df[f"{b_name} Equiv Value (₹)"] = b_val
+        win_df[f"{b_name} SIP Return (%)"] = (((b_val - cum_k) / cum_k_safe) * 100.0).fillna(0.0)
 
     return win_df.reset_index(drop=True), used_bench_tickers
 
@@ -1522,19 +1532,19 @@ def main():
                                     )
                                 )
                         fig_run.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray")
-                        y_title = "Cumulative Return on Invested Capital (%)"
-                        chart_title = "Run-Line Graph: My Equity Return (%) vs. Nifty 50, Midcap & Smallcap (Cashflow-Matched)"
+                        y_title = f"Return in {timeframe_opt} (%)"
+                        chart_title = f"Run-Line Graph: My Equity Return (%) vs. Nifty Indices ({timeframe_opt}, Cashflow-Matched)"
 
                     elif comparison_mode.startswith("📊"):
                         # Point-to-point normalized return rebased to 0% at window start
                         fig_run.add_trace(
                             go.Scatter(
                                 x=bench_df["Date"],
-                                y=bench_df["My Equity Window Return (%)"],
-                                name="My Equity Portfolio (%)",
+                                y=bench_df["My Equity TWR (%)"],
+                                name="My Equity Portfolio (TWR %)",
                                 mode="lines",
                                 line=dict(color="#2563eb", width=3.5),
-                                hovertemplate="<b>%{x|%d %b %Y}</b><br>My Equity: %{y:+.2f}%<extra></extra>",
+                                hovertemplate="<b>%{x|%d %b %Y}</b><br>My Equity (TWR): %{y:+.2f}%<extra></extra>",
                             )
                         )
                         palette = {
@@ -1556,7 +1566,7 @@ def main():
                                     )
                                 )
                         fig_run.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray")
-                        y_title = "Return Since Window Start (%)"
+                        y_title = f"Return in {timeframe_opt} (%)"
                         chart_title = f"Normalized Run-Line Graph ({win_start.strftime('%d %b %Y')} to Today, Base = 0%)"
 
                     else:
@@ -1597,7 +1607,7 @@ def main():
                                     )
                                 )
                         y_title = "Portfolio Value (₹)"
-                        chart_title = "Portfolio Value Run-Line: My Equity (₹) vs. Equivalent SIP in Nifty Indices (₹)"
+                        chart_title = f"Portfolio Value Run-Line in {timeframe_opt}: My Equity vs. Nifty Indices (₹)"
 
                     fig_run.update_layout(
                         title=chart_title,
@@ -1610,20 +1620,27 @@ def main():
                     )
                     st.plotly_chart(fig_run, use_container_width=True)
 
-                    # Summary Outperformance / Alpha Cards below Run-Line
+                    # Summary Outperformance / Alpha Cards dynamically computed for the selected timeframe!
                     latest_row = bench_df.iloc[-1]
-                    my_ret_latest = float(latest_row.get("My Equity Return (%)", 0.0))
+                    is_p2p = comparison_mode.startswith("📊")
+                    my_ret_col = "My Equity TWR (%)" if is_p2p else "My Equity Return (%)"
+                    my_ret_latest = float(latest_row.get(my_ret_col, 0.0))
+
+                    st.markdown(
+                        f"**Performance in Selected Timeframe — {timeframe_opt}** (My Equity: **{my_ret_latest:+.2f}%**):"
+                    )
                     b1, b2, b3 = st.columns(3)
                     for col_ui, b_name in zip([b1, b2, b3], ["Nifty 50", "Nifty Midcap", "Nifty Smallcap"]):
-                        sip_col = f"{b_name} SIP Return (%)"
+                        ret_col = f"{b_name} Index Return (%)" if is_p2p else f"{b_name} SIP Return (%)"
                         val_col = f"{b_name} Equiv Value (₹)"
-                        if sip_col in latest_row:
-                            b_ret = float(latest_row[sip_col])
+                        if ret_col in latest_row:
+                            b_ret = float(latest_row[ret_col])
                             alpha = my_ret_latest - b_ret
-                            b_val = float(latest_row[val_col])
+                            b_val = float(latest_row.get(val_col, 0.0))
+                            val_str = "" if is_p2p else f" ({format_inr(b_val)})"
                             col_ui.metric(
-                                f"vs. {b_name} (Same Cashflow)",
-                                f" Benchmark: {b_ret:+.2f}% ({format_inr(b_val)})",
+                                f"vs. {b_name} ({timeframe_opt})",
+                                f"Benchmark: {b_ret:+.2f}%{val_str}",
                                 f"Your Alpha: {alpha:+.2f}% ({'Outperforming' if alpha >= 0 else 'Trailing'})",
                             )
 

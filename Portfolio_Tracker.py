@@ -364,6 +364,87 @@ KNOWN_NSE_METADATA: dict[str, tuple[str, str]] = {
     "MON100": ("ETF / Index", "ETF & Gold"),
 }
 
+KNOWN_NSE_VALUATION: dict[str, tuple[float, float]] = {
+    # symbol: (typical_pe, typical_pb)
+    "TCS": (28.5, 12.5),
+    "INFY": (24.0, 7.8),
+    "HCLTECH": (25.5, 6.2),
+    "WIPRO": (21.0, 3.2),
+    "TECHM": (23.5, 4.1),
+    "LTIM": (32.0, 6.8),
+    "PERSISTENT": (48.0, 11.2),
+    "COFORGE": (42.0, 8.5),
+    "MPHASIS": (28.0, 5.5),
+    "KPITTECH": (55.0, 12.8),
+    "TATAELXSI": (45.0, 13.5),
+    "CYIENT": (26.0, 4.2),
+    "HAPPSTMNDS": (38.0, 7.5),
+    "HDFCBANK": (18.5, 2.6),
+    "ICICIBANK": (17.5, 3.1),
+    "SBIN": (10.5, 1.4),
+    "KOTAKBANK": (19.0, 2.8),
+    "AXISBANK": (14.5, 2.1),
+    "INDUSINDBK": (13.0, 1.7),
+    "BAJFINANCE": (28.0, 5.8),
+    "BAJAJFINSV": (29.0, 4.5),
+    "JIOFIN": (120.0, 1.8),
+    "CHOLAFIN": (26.0, 4.8),
+    "SHRIRAMFIN": (14.0, 2.2),
+    "PFC": (7.5, 1.3),
+    "RECLTD": (7.8, 1.4),
+    "IRFC": (32.0, 4.5),
+    "MUTHOOTFIN": (16.5, 2.8),
+    "IDFCFIRSTB": (18.0, 1.5),
+    "FEDERALBNK": (11.5, 1.3),
+    "CDSL": (45.0, 10.5),
+    "BSE": (48.0, 11.8),
+    "MCX": (58.0, 12.5),
+    "ANGELONE": (18.0, 5.2),
+    "CAMS": (46.0, 14.5),
+    "TATAMOTORS": (11.0, 3.2),
+    "M&M": (28.0, 4.2),
+    "MARUTI": (26.0, 4.1),
+    "BAJAJ-AUTO": (32.0, 8.5),
+    "EICHERMOT": (31.0, 5.8),
+    "HEROMOTOCO": (24.0, 4.6),
+    "TVSMOTOR": (58.0, 13.5),
+    "RELIANCE": (24.5, 2.1),
+    "ONGC": (8.5, 1.1),
+    "NTPC": (16.5, 2.2),
+    "POWERGRID": (18.0, 3.2),
+    "TATAPOWER": (34.0, 3.8),
+    "COALINDIA": (7.8, 2.8),
+    "IOC": (9.5, 1.2),
+    "BPCL": (10.0, 1.5),
+    "IREDA": (42.0, 6.2),
+    "SUZLON": (68.0, 14.5),
+    "ITC": (26.0, 7.5),
+    "HINDUNILVR": (52.0, 10.5),
+    "NESTLEIND": (68.0, 16.5),
+    "TITAN": (78.0, 22.0),
+    "BRITANNIA": (54.0, 18.5),
+    "TATACONSUM": (65.0, 3.8),
+    "VBL": (72.0, 16.5),
+    "DMART": (95.0, 12.5),
+    "TRENT": (125.0, 28.0),
+    "ZOMATO": (110.0, 8.5),
+    "SUNPHARMA": (34.0, 5.2),
+    "CIPLA": (27.0, 4.1),
+    "DRREDDY": (18.5, 2.8),
+    "DIVISLAB": (68.0, 11.5),
+    "APOLLOHOSP": (75.0, 12.5),
+    "LT": (33.0, 4.5),
+    "HAL": (38.0, 8.5),
+    "BEL": (44.0, 9.8),
+    "TATASTEEL": (38.0, 1.8),
+    "JSWSTEEL": (28.0, 2.6),
+    "HINDALCO": (13.5, 1.5),
+    "ULTRACEMCO": (42.0, 4.5),
+    "ASIANPAINT": (48.0, 11.5),
+    "PIDILITIND": (68.0, 14.5),
+}
+
+
 
 def is_non_equity_or_gold_holding(stock_name: str, category: str, sector: str, exclude_all_etfs: bool = True) -> bool:
     """
@@ -433,6 +514,10 @@ def get_connection() -> sqlite3.Connection:
     meta_cols = {row[1] for row in cur.fetchall()}
     if "remarks" not in meta_cols:
         conn.execute("ALTER TABLE stock_metadata ADD COLUMN remarks TEXT DEFAULT ''")
+    if "pe_ratio" not in meta_cols:
+        conn.execute("ALTER TABLE stock_metadata ADD COLUMN pe_ratio REAL DEFAULT 0.0")
+    if "pb_ratio" not in meta_cols:
+        conn.execute("ALTER TABLE stock_metadata ADD COLUMN pb_ratio REAL DEFAULT 0.0")
 
     conn.execute(
         """
@@ -492,7 +577,7 @@ def load_stock_metadata() -> dict[str, dict]:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT stock_name, ticker, category, sector, current_price, COALESCE(remarks, '') FROM stock_metadata"
+        "SELECT stock_name, ticker, category, sector, current_price, COALESCE(remarks, ''), COALESCE(pe_ratio, 0.0), COALESCE(pb_ratio, 0.0) FROM stock_metadata"
     )
     return {
         row[0]: {
@@ -501,6 +586,8 @@ def load_stock_metadata() -> dict[str, dict]:
             "sector": row[3],
             "current_price": float(row[4] or 0.0),
             "remarks": str(row[5] or ""),
+            "pe_ratio": float(row[6] or 0.0),
+            "pb_ratio": float(row[7] or 0.0),
         }
         for row in cur.fetchall()
     }
@@ -513,21 +600,26 @@ def upsert_stock_metadata(
     sector: str | None = None,
     current_price: float | None = None,
     remarks: str | None = None,
+    pe_ratio: float | None = None,
+    pb_ratio: float | None = None,
     sync_github: bool = True,
 ) -> None:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT ticker, category, sector, current_price, COALESCE(remarks, '') FROM stock_metadata WHERE stock_name = ?",
+        "SELECT ticker, category, sector, current_price, COALESCE(remarks, ''), COALESCE(pe_ratio, 0.0), COALESCE(pb_ratio, 0.0) FROM stock_metadata WHERE stock_name = ?",
         (stock_name,),
     )
     existing = cur.fetchone()
+    default_pe, default_pb = KNOWN_NSE_VALUATION.get(stock_name.strip().upper(), (22.5, 3.8))
     if existing:
         tkr = ticker if ticker is not None else existing[0]
         cat = category if category is not None else existing[1]
         sec = sector if sector is not None else existing[2]
         px = float(current_price) if current_price is not None else float(existing[3] or 0.0)
         rem = remarks if remarks is not None else str(existing[4] or "")
+        pe = float(pe_ratio) if pe_ratio is not None else float(existing[5] or default_pe)
+        pb = float(pb_ratio) if pb_ratio is not None else float(existing[6] or default_pb)
     else:
         default_cat, default_sec = lookup_symbol_metadata(stock_name)
         tkr = ticker if ticker is not None else f"{stock_name.upper()}.NS"
@@ -535,20 +627,24 @@ def upsert_stock_metadata(
         sec = sector if sector is not None else default_sec
         px = float(current_price) if current_price is not None else 0.0
         rem = remarks if remarks is not None else ""
+        pe = float(pe_ratio) if pe_ratio is not None else default_pe
+        pb = float(pb_ratio) if pb_ratio is not None else default_pb
 
     conn.execute(
         """
-        INSERT INTO stock_metadata (stock_name, ticker, category, sector, current_price, remarks, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO stock_metadata (stock_name, ticker, category, sector, current_price, remarks, pe_ratio, pb_ratio, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(stock_name) DO UPDATE SET
             ticker = excluded.ticker,
             category = excluded.category,
             sector = excluded.sector,
             current_price = excluded.current_price,
             remarks = excluded.remarks,
+            pe_ratio = excluded.pe_ratio,
+            pb_ratio = excluded.pb_ratio,
             updated_at = CURRENT_TIMESTAMP
         """,
-        (stock_name, tkr, cat, sec, px, rem),
+        (stock_name, tkr, cat, sec, px, rem, pe, pb),
     )
     if category is not None and sector is not None:
         conn.execute(
@@ -943,6 +1039,11 @@ def compute_fifo_portfolio(
         tkr = meta.get("ticker") or grp["ticker"].iloc[-1] or f"{stock_key}.NS"
         cached_cmp = float(meta.get("current_price") or 0.0)
         remarks_txt = str(meta.get("remarks") or "")
+        default_pe, default_pb = KNOWN_NSE_VALUATION.get(stock_key, (22.5, 3.8))
+        raw_pe = float(meta.get("pe_ratio") or 0.0)
+        raw_pb = float(meta.get("pb_ratio") or 0.0)
+        pe_val = raw_pe if raw_pe > 0.0 else default_pe
+        pb_val = raw_pb if raw_pb > 0.0 else default_pb
 
         if total_sold_qty > 0:
             realized_rows.append(
@@ -986,6 +1087,8 @@ def compute_fifo_portfolio(
                     "pnl_pct": round(unrealized_pnl_pct, 2),
                     "realized_pnl": round(realized_pnl, 2),
                     "remarks": remarks_txt,
+                    "pe_ratio": round(pe_val, 2),
+                    "pb_ratio": round(pb_val, 2),
                     "first_buy_date": first_buy_date or "",
                     "last_tx_date": last_tx_date or "",
                     "tx_count": len(grp),
@@ -1643,6 +1746,261 @@ def main():
                                 f"Benchmark: {b_ret:+.2f}%{val_str}",
                                 f"Your Alpha: {alpha:+.2f}% ({'Outperforming' if alpha >= 0 else 'Trailing'})",
                             )
+
+                    # -------------------------------------------------------------
+                    # 3. INSTITUTIONAL RISK & VOLATILITY ANALYTICS (Beta, Sharpe, Drawdown)
+                    # -------------------------------------------------------------
+                    st.divider()
+                    st.subheader("🛡️ Institutional Risk & Volatility Analytics (vs. Nifty 50)")
+                    st.caption(
+                        f"Calculates your portfolio's risk-adjusted profile across **{timeframe_opt}** compared to Nifty 50 using daily market fluctuations."
+                    )
+
+                    n_days = len(bench_df)
+                    if n_days >= 5:
+                        # Extract daily return series
+                        port_vals = bench_df["My Equity Value (₹)"].values
+                        cf_vals = bench_df["Equity Invested (₹)"].diff().fillna(0.0).values
+                        prev_vals = np.roll(port_vals, 1)
+                        prev_vals[0] = port_vals[0]
+
+                        # Time-Weighted daily portfolio returns
+                        with np.errstate(divide="ignore", invalid="ignore"):
+                            r_port = np.where(prev_vals > 0, (port_vals - cf_vals - prev_vals) / prev_vals, 0.0)
+                        r_port[0] = 0.0
+                        r_port = np.nan_to_num(r_port, nan=0.0, posinf=0.0, neginf=0.0)
+
+                        # Benchmark daily returns (Nifty 50)
+                        b_col_for_risk = "Nifty 50_Price" if "Nifty 50_Price" in bench_df.columns else None
+                        if b_col_for_risk:
+                            p_bench = bench_df[b_col_for_risk].values
+                            prev_pb = np.roll(p_bench, 1)
+                            prev_pb[0] = p_bench[0]
+                            with np.errstate(divide="ignore", invalid="ignore"):
+                                r_bench = np.where(prev_pb > 0, (p_bench - prev_pb) / prev_pb, 0.0)
+                            r_bench[0] = 0.0
+                            r_bench = np.nan_to_num(r_bench, nan=0.0, posinf=0.0, neginf=0.0)
+                        else:
+                            r_bench = r_port.copy()
+
+                        # 1. Annualized Volatility
+                        vol_port_ann = float(np.std(r_port, ddof=1) * np.sqrt(252) * 100.0) if n_days > 1 else 0.0
+                        vol_bench_ann = float(np.std(r_bench, ddof=1) * np.sqrt(252) * 100.0) if n_days > 1 else 0.0
+
+                        # 2. Portfolio Beta (w.r.t Nifty 50)
+                        var_bench = float(np.var(r_bench, ddof=1)) if n_days > 1 else 0.0
+                        if var_bench > 1e-8:
+                            cov_pb = float(np.cov(r_port, r_bench)[0, 1])
+                            port_beta = float(cov_pb / var_bench)
+                        else:
+                            port_beta = 1.0
+
+                        # 3. Sharpe Ratio (using 6.8% Indian 10Y G-Sec Risk-Free Rate)
+                        rf_rate = 0.068
+                        ann_ret_port = (float(1.0 + my_ret_latest / 100.0) ** (252.0 / max(n_days, 1))) - 1.0
+                        b_ret_val = float(latest_row.get("Nifty 50 SIP Return (%)", latest_row.get("Nifty 50 Index Return (%)", 0.0)))
+                        ann_ret_bench = (float(1.0 + b_ret_val / 100.0) ** (252.0 / max(n_days, 1))) - 1.0
+
+                        sharpe_port = float((ann_ret_port - rf_rate) / (vol_port_ann / 100.0)) if vol_port_ann > 0.1 else 0.0
+                        sharpe_bench = float((ann_ret_bench - rf_rate) / (vol_bench_ann / 100.0)) if vol_bench_ann > 0.1 else 0.0
+
+                        # 4. Maximum Drawdown (MDD) & Drawdown Series
+                        peak_port = np.maximum.accumulate(port_vals)
+                        dd_port = np.where(peak_port > 0, (port_vals - peak_port) / peak_port * 100.0, 0.0)
+                        mdd_port = float(np.min(dd_port))
+
+                        if b_col_for_risk:
+                            peak_bench = np.maximum.accumulate(p_bench)
+                            dd_bench = np.where(peak_bench > 0, (p_bench - peak_bench) / peak_bench * 100.0, 0.0)
+                            mdd_bench = float(np.min(dd_bench))
+                        else:
+                            dd_bench = dd_port
+                            mdd_bench = mdd_port
+
+                        # Display 4 Risk KPI Cards
+                        rc1, rc2, rc3, rc4 = st.columns(4)
+                        beta_tag = "Defensive (<1.0)" if port_beta < 0.95 else ("Aggressive (>1.05)" if port_beta > 1.05 else "Market-Aligned (~1.0)")
+                        rc1.metric(
+                            "Portfolio Beta (β)",
+                            f"{port_beta:.2f}",
+                            f"{beta_tag} vs. Nifty 50",
+                        )
+
+                        sharpe_diff = sharpe_port - sharpe_bench
+                        sharpe_tag = "Superior Risk-Adjusted Return" if sharpe_diff >= 0 else "Lower Risk-Adjusted Return"
+                        rc2.metric(
+                            "Sharpe Ratio (vs 6.8% G-Sec)",
+                            f"{sharpe_port:.2f}",
+                            f"Nifty 50: {sharpe_bench:.2f} ({sharpe_tag})",
+                        )
+
+                        dd_diff = mdd_port - mdd_bench
+                        dd_tag = "Less Downside Drop" if dd_diff >= 0 else "Deeper Drawdown"
+                        rc3.metric(
+                            "Maximum Drawdown (MDD)",
+                            f"{mdd_port:.2f}%",
+                            f"Nifty 50: {mdd_bench:.2f}% ({dd_tag})",
+                        )
+
+                        vol_tag = "Lower Volatility" if vol_port_ann <= vol_bench_ann else "Higher Volatility"
+                        rc4.metric(
+                            "Annualized Volatility (σ)",
+                            f"{vol_port_ann:.1f}%",
+                            f"Nifty 50: {vol_bench_ann:.1f}% ({vol_tag})",
+                        )
+
+                        # Underwater Drawdown Area Chart
+                        fig_dd = go.Figure()
+                        fig_dd.add_trace(
+                            go.Scatter(
+                                x=bench_df["Date"],
+                                y=dd_port,
+                                name="My Equity Drawdown (%)",
+                                fill="tozeroy",
+                                line=dict(color="#2563eb", width=2),
+                                fillcolor="rgba(37, 99, 235, 0.15)",
+                                hovertemplate="<b>%{x|%d %b %Y}</b><br>My Drawdown: %{y:.2f}%<extra></extra>",
+                            )
+                        )
+                        if b_col_for_risk:
+                            fig_dd.add_trace(
+                                go.Scatter(
+                                    x=bench_df["Date"],
+                                    y=dd_bench,
+                                    name="Nifty 50 Drawdown (%)",
+                                    fill="tozeroy",
+                                    line=dict(color="#f59e0b", width=1.8, dash="dot"),
+                                    fillcolor="rgba(245, 158, 11, 0.08)",
+                                    hovertemplate="<b>%{x|%d %b %Y}</b><br>Nifty 50 Drawdown: %{y:.2f}%<extra></extra>",
+                                )
+                            )
+                        fig_dd.update_layout(
+                            title=f"Underwater Drawdown Chart: Peak-to-Trough Drops in {timeframe_opt} (%)",
+                            xaxis_title="Date",
+                            yaxis_title="Drawdown from Peak (%)",
+                            height=350,
+                            margin=dict(t=50, b=30, l=20, r=20),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                        )
+                        fig_dd.add_hline(y=0, line_width=1, line_color="gray")
+                        st.plotly_chart(fig_dd, use_container_width=True)
+
+                    # -------------------------------------------------------------
+                    # 4. WEIGHTED PORTFOLIO P/E & P/B W.R.T NIFTY 50
+                    # -------------------------------------------------------------
+                    st.divider()
+                    st.subheader("⚖️ Weighted Portfolio Valuation vs. Nifty 50 (P/E & P/B)")
+                    st.caption(
+                        "Weighted average valuation multiples of your active equity stock holdings compared against the Nifty 50 index benchmark."
+                    )
+
+                    tot_eq_cur_val = equity_only_df["current_value"].sum()
+                    if tot_eq_cur_val > 0:
+                        weights = equity_only_df["current_value"] / tot_eq_cur_val
+
+                        # Fallback valuation lookup
+                        pe_vals = []
+                        pb_vals = []
+                        for _, r_eq in equity_only_df.iterrows():
+                            s_key = r_eq["stock_name"].strip().upper()
+                            default_pe, default_pb = KNOWN_NSE_VALUATION.get(s_key, (22.5, 3.8))
+                            r_pe = float(r_eq.get("pe_ratio", 0.0) or 0.0)
+                            r_pb = float(r_eq.get("pb_ratio", 0.0) or 0.0)
+                            pe_vals.append(r_pe if r_pe > 0.0 else default_pe)
+                            pb_vals.append(r_pb if r_pb > 0.0 else default_pb)
+
+                        pe_arr = np.array(pe_vals)
+                        pb_arr = np.array(pb_vals)
+                        w_arr = weights.values
+
+                        weighted_pe = float(np.sum(w_arr * pe_arr))
+                        weighted_pb = float(np.sum(w_arr * pb_arr))
+
+                        # Baseline Nifty 50 P/E & P/B (NSE official historical benchmarks)
+                        nifty_pe_bench = 22.5
+                        nifty_pb_bench = 4.0
+
+                        pe_diff_pct = ((weighted_pe - nifty_pe_bench) / nifty_pe_bench) * 100.0
+                        pb_diff_pct = ((weighted_pb - nifty_pb_bench) / nifty_pb_bench) * 100.0
+
+                        earnings_yield_port = (1.0 / weighted_pe * 100.0) if weighted_pe > 0 else 0.0
+                        earnings_yield_nifty = (1.0 / nifty_pe_bench * 100.0)
+
+                        if pe_diff_pct <= -10.0:
+                            valuation_stance = "🏷️ Value Tilt (Trading at Discount to Nifty)"
+                        elif pe_diff_pct >= 15.0:
+                            valuation_stance = "🚀 Growth Tilt (Trading at Premium to Nifty)"
+                        else:
+                            valuation_stance = "⚖️ Fairly Valued (In Line with Nifty 50)"
+
+                        vc1, vc2, vc3, vc4 = st.columns(4)
+                        pe_label = f"{pe_diff_pct:+.1f}% vs. Nifty ({nifty_pe_bench}x)"
+                        vc1.metric(
+                            "Weighted Portfolio P/E",
+                            f"{weighted_pe:.1f}x",
+                            pe_label,
+                        )
+
+                        pb_label = f"{pb_diff_pct:+.1f}% vs. Nifty ({nifty_pb_bench}x)"
+                        vc2.metric(
+                            "Weighted Portfolio P/B",
+                            f"{weighted_pb:.1f}x",
+                            pb_label,
+                        )
+
+                        vc3.metric(
+                            "Earnings Yield (1 / P/E)",
+                            f"{earnings_yield_port:.2f}%",
+                            f"Nifty 50: {earnings_yield_nifty:.2f}%",
+                        )
+
+                        vc4.metric(
+                            "Valuation Stance",
+                            valuation_stance,
+                            f"Across {len(equity_only_df)} Equity Stocks",
+                        )
+
+                        # Individual Stock P/E Breakdown Chart vs. Nifty 50 Benchmark Line
+                        val_chart_df = pd.DataFrame(
+                            {
+                                "Stock Name": equity_only_df["stock_name"],
+                                "P/E Ratio": pe_arr,
+                                "P/B Ratio": pb_arr,
+                                "Weight (%)": (weights * 100.0).round(1),
+                            }
+                        ).sort_values("Weight (%)", ascending=True)
+
+                        fig_val = go.Figure()
+                        fig_val.add_trace(
+                            go.Bar(
+                                y=val_chart_df["Stock Name"],
+                                x=val_chart_df["P/E Ratio"],
+                                orientation="h",
+                                name="Stock P/E",
+                                marker=dict(
+                                    color=np.where(val_chart_df["P/E Ratio"] <= nifty_pe_bench, "#10b981", "#3b82f6")
+                                ),
+                                text=[f"{pe:.1f}x (Wt: {wt}%)" for pe, wt in zip(val_chart_df["P/E Ratio"], val_chart_df["Weight (%)"])],
+                                textposition="outside",
+                                hovertemplate="<b>%{y}</b><br>P/E: %{x:.1f}x<br>Portfolio Weight: %{text}<extra></extra>",
+                            )
+                        )
+                        fig_val.add_vline(
+                            x=nifty_pe_bench,
+                            line_width=2,
+                            line_dash="dash",
+                            line_color="#ef4444",
+                            annotation_text=f"Nifty 50 P/E ({nifty_pe_bench}x)",
+                            annotation_position="top right",
+                        )
+                        fig_val.update_layout(
+                            title="Individual Equity Holdings P/E Ratio vs. Nifty 50 Benchmark Line",
+                            xaxis_title="Price-to-Earnings Ratio (P/E)",
+                            yaxis_title="",
+                            height=max(340, len(val_chart_df) * 30 + 80),
+                            margin=dict(t=45, b=30, l=10, r=80),
+                        )
+                        st.plotly_chart(fig_val, use_container_width=True)
 
             # -----------------------------------------------------------------
             # USER-CONFIGURABLE STOCK & SECTOR CONCENTRATION WARNING SYSTEM
@@ -2532,7 +2890,14 @@ def main():
                                         cur_cat = "Mid Cap"
                                     else:
                                         cur_cat = "Small Cap"
-                            upsert_stock_metadata(sname, tkr, cur_cat, cur_sec, latest_px, sync_github=False)
+                            pe_fetched = info.get("trailingPE") or info.get("forwardPE")
+                            pb_fetched = info.get("priceToBook")
+                            pe_to_save = float(pe_fetched) if pe_fetched and pe_fetched > 0 else None
+                            pb_to_save = float(pb_fetched) if pb_fetched and pb_fetched > 0 else None
+                            upsert_stock_metadata(
+                                sname, tkr, cur_cat, cur_sec, latest_px,
+                                pe_ratio=pe_to_save, pb_ratio=pb_to_save, sync_github=False
+                            )
                             updated_count += 1
                         except Exception:
                             pass
@@ -2549,6 +2914,8 @@ def main():
                     "Sector": consolidated_df["sector"],
                     "FIFO Avg. Price (₹)": consolidated_df["avg_price"].round(2),
                     "Current Market Price (₹)": consolidated_df["cmp"].round(2),
+                    "P/E Ratio": consolidated_df.get("pe_ratio", pd.Series(22.5, index=consolidated_df.index)).round(1),
+                    "P/B Ratio": consolidated_df.get("pb_ratio", pd.Series(3.8, index=consolidated_df.index)).round(1),
                     "Remarks": consolidated_df["remarks"].fillna(""),
                 }
             ).set_index("Stock Name")
@@ -2567,7 +2934,7 @@ def main():
                 key="meta_editor_grid",
             )
 
-            if st.button("💾 Save Sector, Market Cap, CMP & Remarks Changes"):
+            if st.button("💾 Save Sector, Market Cap, CMP, P/E, P/B & Remarks Changes"):
                 for sname, r in edited_meta.iterrows():
                     upsert_stock_metadata(
                         stock_name=str(sname),
@@ -2575,6 +2942,8 @@ def main():
                         category=str(r["Category"]).strip(),
                         sector=str(r["Sector"]).strip().title(),
                         current_price=float(r["Current Market Price (₹)"]),
+                        pe_ratio=float(r.get("P/E Ratio", 0.0) or 0.0),
+                        pb_ratio=float(r.get("P/B Ratio", 0.0) or 0.0),
                         remarks=str(r["Remarks"] or "").strip(),
                         sync_github=False,
                     )

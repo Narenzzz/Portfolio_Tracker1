@@ -1227,7 +1227,7 @@ def fetch_benchmark_and_equity_series(
     portfolio_daily_val = (qty_df * price_df).sum(axis=1)
 
     # Filter to requested display window [start_dt, end_dt]
-    win_mask = all_dates >= start_dt.normalize()
+    win_mask = (all_dates >= start_dt.normalize()) & (all_dates <= end_dt.normalize())
     win_dates = all_dates[win_mask]
     if len(win_dates) == 0:
         win_dates = all_dates
@@ -1562,6 +1562,7 @@ def main():
                             "Last 6 Months (6M)",
                             "Last 3 Months (3M)",
                             "Year-to-Date (YTD)",
+                            "📅 Custom Date Range (Pick Start & End Date)...",
                         ],
                         index=0,
                     )
@@ -1575,16 +1576,36 @@ def main():
                         ],
                     )
 
+                win_end = today_d
                 if timeframe_opt == "Last 1 Year (1Y)":
                     win_start = max(earliest_eq_date, today_d - timedelta(days=365))
+                    display_timeframe = "Last 1 Year (1Y)"
                 elif timeframe_opt == "Last 6 Months (6M)":
                     win_start = max(earliest_eq_date, today_d - timedelta(days=182))
+                    display_timeframe = "Last 6 Months (6M)"
                 elif timeframe_opt == "Last 3 Months (3M)":
                     win_start = max(earliest_eq_date, today_d - timedelta(days=90))
+                    display_timeframe = "Last 3 Months (3M)"
                 elif timeframe_opt == "Year-to-Date (YTD)":
                     win_start = max(earliest_eq_date, date(today_d.year, 1, 1))
+                    display_timeframe = "Year-to-Date (YTD)"
+                elif timeframe_opt.startswith("📅"):
+                    custom_date_sel = st.date_input(
+                        "Choose Custom Comparison Period (Start & End Date)",
+                        value=(max(earliest_eq_date, today_d - timedelta(days=182)), today_d),
+                        min_value=earliest_eq_date,
+                        max_value=today_d,
+                    )
+                    if isinstance(custom_date_sel, (list, tuple)) and len(custom_date_sel) == 2:
+                        win_start, win_end = custom_date_sel[0], custom_date_sel[1]
+                    elif isinstance(custom_date_sel, (list, tuple)) and len(custom_date_sel) == 1:
+                        win_start, win_end = custom_date_sel[0], today_d
+                    else:
+                        win_start, win_end = earliest_eq_date, today_d
+                    display_timeframe = f"Custom Period ({win_start.strftime('%d %b %Y')} to {win_end.strftime('%d %b %Y')})"
                 else:
                     win_start = earliest_eq_date
+                    display_timeframe = "Since Inception" 
 
                 stock_tkr_map = {
                     r["stock_name"]: (str(r["ticker"]).strip() or f"{r['stock_name']}.NS")
@@ -1596,7 +1617,7 @@ def main():
                         equity_tx_json=eq_tx_df[["tx_date", "stock_name", "tx_type", "qty", "buy_price", "invested_rs"]].to_json(),
                         stock_tickers_map=stock_tkr_map,
                         start_date_str=win_start.isoformat(),
-                        end_date_str=today_d.isoformat(),
+                        end_date_str=win_end.isoformat(),
                     )
 
                 if bench_df.empty:
@@ -1635,8 +1656,8 @@ def main():
                                     )
                                 )
                         fig_run.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray")
-                        y_title = f"Return in {timeframe_opt} (%)"
-                        chart_title = f"Run-Line Graph: My Equity Return (%) vs. Nifty Indices ({timeframe_opt}, Cashflow-Matched)"
+                        y_title = f"Return in {display_timeframe} (%)"
+                        chart_title = f"Run-Line Graph: My Equity Return (%) vs. Nifty Indices ({display_timeframe}, Cashflow-Matched)"
 
                     elif comparison_mode.startswith("📊"):
                         # Point-to-point normalized return rebased to 0% at window start
@@ -1669,7 +1690,7 @@ def main():
                                     )
                                 )
                         fig_run.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray")
-                        y_title = f"Return in {timeframe_opt} (%)"
+                        y_title = f"Return in {display_timeframe} (%)"
                         chart_title = f"Normalized Run-Line Graph ({win_start.strftime('%d %b %Y')} to Today, Base = 0%)"
 
                     else:
@@ -1710,7 +1731,7 @@ def main():
                                     )
                                 )
                         y_title = "Portfolio Value (₹)"
-                        chart_title = f"Portfolio Value Run-Line in {timeframe_opt}: My Equity vs. Nifty Indices (₹)"
+                        chart_title = f"Portfolio Value Run-Line in {display_timeframe}: My Equity vs. Nifty Indices (₹)"
 
                     fig_run.update_layout(
                         title=chart_title,
@@ -1730,7 +1751,7 @@ def main():
                     my_ret_latest = float(latest_row.get(my_ret_col, 0.0))
 
                     st.markdown(
-                        f"**Performance in Selected Timeframe — {timeframe_opt}** (My Equity: **{my_ret_latest:+.2f}%**):"
+                        f"**Performance in Selected Timeframe — {display_timeframe}** (My Equity: **{my_ret_latest:+.2f}%**):"
                     )
                     b1, b2, b3 = st.columns(3)
                     for col_ui, b_name in zip([b1, b2, b3], ["Nifty 50", "Nifty Midcap", "Nifty Smallcap"]):
@@ -1742,7 +1763,7 @@ def main():
                             b_val = float(latest_row.get(val_col, 0.0))
                             val_str = "" if is_p2p else f" ({format_inr(b_val)})"
                             col_ui.metric(
-                                f"vs. {b_name} ({timeframe_opt})",
+                                f"vs. {b_name} ({display_timeframe})",
                                 f"Benchmark: {b_ret:+.2f}%{val_str}",
                                 f"Your Alpha: {alpha:+.2f}% ({'Outperforming' if alpha >= 0 else 'Trailing'})",
                             )
@@ -1753,7 +1774,7 @@ def main():
                     st.divider()
                     st.subheader("🛡️ Institutional Risk & Volatility Analytics (vs. Nifty 50)")
                     st.caption(
-                        f"Calculates your portfolio's risk-adjusted profile across **{timeframe_opt}** compared to Nifty 50 using daily market fluctuations."
+                        f"Calculates your portfolio's risk-adjusted profile across **{display_timeframe}** compared to Nifty 50 using daily market fluctuations."
                     )
 
                     n_days = len(bench_df)
@@ -1875,7 +1896,7 @@ def main():
                                 )
                             )
                         fig_dd.update_layout(
-                            title=f"Underwater Drawdown Chart: Peak-to-Trough Drops in {timeframe_opt} (%)",
+                            title=f"Underwater Drawdown Chart: Peak-to-Trough Drops in {display_timeframe} (%)",
                             xaxis_title="Date",
                             yaxis_title="Drawdown from Peak (%)",
                             height=350,
@@ -2010,24 +2031,36 @@ def main():
             saved_stock_lim = get_app_setting("stock_conc_limit", 15.0)
             saved_sector_lim = get_app_setting("sector_conc_limit", 30.0)
 
+            capping_scope = st.radio(
+                "Concentration Capping Scope",
+                options=[
+                    "🎯 Pure Equity Holdings Only (Excludes GoldBees & Hedging ETFs)",
+                    "🌐 Entire Portfolio (Includes GoldBees & All ETFs)",
+                ],
+                horizontal=True,
+                help="When 'Pure Equity Holdings Only' is selected, your single-stock cap applies strictly across your equity stocks so large hedging allocations in GoldBees / ETFs never trigger false concentration warnings.",
+            )
+
+            is_equity_capping = capping_scope.startswith("🎯")
+
             lim_c1, lim_c2, lim_c3 = st.columns([2, 2, 1])
             with lim_c1:
                 stock_limit_pct = st.slider(
-                    "Max Single-Stock Limit (%)",
+                    f"Max Single-Stock Cap ({'Pure Equity' if is_equity_capping else 'Overall'} %)",
                     min_value=2.0,
                     max_value=50.0,
                     value=float(saved_stock_lim),
                     step=1.0,
-                    help="Trigger a warning if any single stock exceeds this % of your total invested capital.",
+                    help="Trigger a warning if any single company stock exceeds this % of your invested capital.",
                 )
             with lim_c2:
                 sector_limit_pct = st.slider(
-                    "Max Single-Sector Limit (%)",
+                    f"Max Single-Sector Cap ({'Pure Equity' if is_equity_capping else 'Overall'} %)",
                     min_value=5.0,
                     max_value=80.0,
                     value=float(saved_sector_lim),
                     step=1.0,
-                    help="Trigger a warning if any single sector exceeds this % of your total invested capital.",
+                    help="Trigger a warning if any single sector exceeds this % of your invested capital.",
                 )
             with lim_c3:
                 st.write("")
@@ -2036,45 +2069,76 @@ def main():
                     set_app_setting("sector_conc_limit", sector_limit_pct, sync_github=True)
                     st.toast("Saved concentration limits!", icon="✅")
 
-            breached_stocks = consolidated_df[consolidated_df["allocation_pct"] > stock_limit_pct]
-            sector_agg = (
-                consolidated_df.groupby("sector", as_index=False)["invested_rs"].sum()
-            )
+            if is_equity_capping:
+                monitored_df = equity_only_df.copy()
+                base_invested = eq_invested
+                scope_label = "Pure Equity"
+            else:
+                monitored_df = consolidated_df.copy()
+                base_invested = total_invested
+                scope_label = "Total Portfolio"
+
+            if base_invested > 0:
+                monitored_df["monitored_pct"] = (monitored_df["invested_rs"] / base_invested) * 100.0
+            else:
+                monitored_df["monitored_pct"] = 0.0
+
+            breached_stocks = monitored_df[monitored_df["monitored_pct"] > stock_limit_pct]
+
+            if is_equity_capping:
+                # Exclude ETF & Gold sector so hedging assets do not trigger false sector alarms
+                sector_agg = (
+                    monitored_df[monitored_df["sector"] != "ETF & Gold"]
+                    .groupby("sector", as_index=False)["invested_rs"]
+                    .sum()
+                )
+            else:
+                sector_agg = (
+                    monitored_df.groupby("sector", as_index=False)["invested_rs"].sum()
+                )
             sector_agg["sector_pct"] = (
-                sector_agg["invested_rs"] / total_invested * 100.0 if total_invested > 0 else 0.0
+                sector_agg["invested_rs"] / base_invested * 100.0 if base_invested > 0 else 0.0
             )
             breached_sectors = sector_agg[sector_agg["sector_pct"] > sector_limit_pct].sort_values(
                 "sector_pct", ascending=False
             )
 
+            if is_equity_capping and not non_equity_df.empty:
+                hedging_names = ", ".join(non_equity_df["stock_name"].unique())
+                st.info(
+                    f"🛡️ **Hedging Assets Excluded from Stock Capping:** `{hedging_names}` "
+                    f"({format_inr(gold_invested)}, {gold_invested / total_invested * 100.0:.1f}% of overall portfolio) "
+                    f"is treated as hedging/asset allocation and excluded from your equity concentration cap."
+                )
+
             if breached_stocks.empty and breached_sectors.empty:
                 st.success(
-                    f"✅ All holdings are within your safe concentration limits (Stock ≤ {stock_limit_pct:.0f}%, Sector ≤ {sector_limit_pct:.0f}%)."
+                    f"✅ All {scope_label} holdings are within your safe limits (Single Stock ≤ {stock_limit_pct:.0f}%, Sector ≤ {sector_limit_pct:.0f}% of {scope_label.lower()} capital)."
                 )
             else:
                 w_col1, w_col2 = st.columns(2)
                 with w_col1:
                     if not breached_stocks.empty:
                         for _, srow in breached_stocks.iterrows():
-                            excess_pct = srow["allocation_pct"] - stock_limit_pct
-                            excess_rs = (excess_pct / 100.0) * total_invested
+                            excess_pct = srow["monitored_pct"] - stock_limit_pct
+                            excess_rs = (excess_pct / 100.0) * base_invested
                             st.warning(
-                                f"⚠️ **Stock Limit Breached — `{srow['stock_name']}`**: Holds **{srow['allocation_pct']:.1f}%** "
-                                f"({format_inr(srow['invested_rs'])}), which is **+{excess_pct:.1f}%** ({format_inr(excess_rs)}) above your **{stock_limit_pct:.0f}%** cap."
+                                f"⚠️ **{scope_label} Cap Breached — `{srow['stock_name']}`**: Holds **{srow['monitored_pct']:.1f}%** "
+                                f"({format_inr(srow['invested_rs'])}), which is **+{excess_pct:.1f}%** ({format_inr(excess_rs)}) above your **{stock_limit_pct:.0f}%** {scope_label.lower()} cap."
                             )
                     else:
-                        st.info(f"✅ No single stock exceeds {stock_limit_pct:.0f}%.")
+                        st.info(f"✅ No single stock exceeds {stock_limit_pct:.0f}% of {scope_label.lower()} capital.")
                 with w_col2:
                     if not breached_sectors.empty:
                         for _, secrow in breached_sectors.iterrows():
                             excess_pct = secrow["sector_pct"] - sector_limit_pct
-                            excess_rs = (excess_pct / 100.0) * total_invested
+                            excess_rs = (excess_pct / 100.0) * base_invested
                             st.error(
-                                f"🚨 **Sector Limit Breached — `{secrow['sector']}`**: Holds **{secrow['sector_pct']:.1f}%** "
+                                f"🚨 **{scope_label} Sector Limit Breached — `{secrow['sector']}`**: Holds **{secrow['sector_pct']:.1f}%** "
                                 f"({format_inr(secrow['invested_rs'])}), which is **+{excess_pct:.1f}%** ({format_inr(excess_rs)}) above your **{sector_limit_pct:.0f}%** cap."
                             )
                     else:
-                        st.info(f"✅ No single sector exceeds {sector_limit_pct:.0f}%.")
+                        st.info(f"✅ No single sector exceeds {sector_limit_pct:.0f}% of {scope_label.lower()} capital.")
 
             uncat_stocks = consolidated_df[
                 (consolidated_df["category"] == "Uncategorized") | (consolidated_df["sector"] == "Other")

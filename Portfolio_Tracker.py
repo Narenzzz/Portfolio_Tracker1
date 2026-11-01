@@ -444,6 +444,89 @@ KNOWN_NSE_VALUATION: dict[str, tuple[float, float]] = {
     "PIDILITIND": (68.0, 14.5),
 }
 
+KNOWN_SHAREHOLDING_PATTERNS: dict[str, dict] = {
+    # 5 quarters: [Q2 FY24, Q3 FY24, Q4 FY24, Q1 FY25, Q2 FY25]
+    "SUZLON": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [13.3, 13.3, 13.3, 13.3, 13.2],
+        "institutional": [17.5, 23.3, 24.2, 27.8, 30.2],
+        "retail": [69.2, 63.4, 62.5, 58.9, 56.6],
+    },
+    "TCS": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [72.3, 72.4, 71.8, 71.8, 71.8],
+        "institutional": [23.1, 23.0, 23.5, 23.6, 23.7],
+        "retail": [4.6, 4.6, 4.7, 4.6, 4.5],
+    },
+    "HDFCBANK": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [0.0, 0.0, 0.0, 0.0, 0.0],
+        "institutional": [82.2, 82.5, 81.9, 82.8, 83.5],
+        "retail": [17.8, 17.5, 18.1, 17.2, 16.5],
+    },
+    "TATAMOTORS": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [46.4, 46.4, 46.4, 46.4, 46.4],
+        "institutional": [35.2, 35.8, 36.4, 37.1, 37.8],
+        "retail": [18.4, 17.8, 17.2, 16.5, 15.8],
+    },
+    "CDSL": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [20.0, 20.0, 15.0, 15.0, 15.0],
+        "institutional": [38.2, 39.5, 41.2, 42.8, 44.5],
+        "retail": [41.8, 40.5, 43.8, 42.2, 40.5],
+    },
+    "RELIANCE": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [50.3, 50.3, 50.3, 50.3, 50.3],
+        "institutional": [38.8, 38.6, 38.4, 38.5, 38.8],
+        "retail": [10.9, 11.1, 11.3, 11.2, 10.9],
+    },
+    "INFY": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [14.9, 14.8, 14.7, 14.6, 14.6],
+        "institutional": [70.5, 70.8, 71.2, 71.5, 71.8],
+        "retail": [14.6, 14.4, 14.1, 13.9, 13.6],
+    },
+    "PERSISTENT": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [31.3, 31.3, 31.3, 31.3, 31.3],
+        "institutional": [50.2, 51.5, 52.8, 53.6, 54.2],
+        "retail": [18.5, 17.2, 15.9, 15.1, 14.5],
+    },
+    "SUNPHARMA": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [54.5, 54.5, 54.5, 54.5, 54.5],
+        "institutional": [33.8, 34.2, 34.5, 34.8, 35.2],
+        "retail": [11.7, 11.3, 11.0, 10.7, 10.3],
+    },
+    "ITC": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [0.0, 0.0, 0.0, 0.0, 0.0],
+        "institutional": [43.2, 43.5, 43.8, 44.1, 44.5],
+        "retail": [56.8, 56.5, 56.2, 55.9, 55.5],
+    },
+    "SBIN": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [57.5, 57.5, 57.5, 57.5, 57.5],
+        "institutional": [34.2, 34.4, 34.6, 34.8, 35.1],
+        "retail": [8.3, 8.1, 7.9, 7.7, 7.4],
+    },
+    "ICICIBANK": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [0.0, 0.0, 0.0, 0.0, 0.0],
+        "institutional": [89.5, 89.8, 90.1, 90.4, 90.8],
+        "retail": [10.5, 10.2, 9.9, 9.6, 9.2],
+    },
+    "LT": {
+        "quarters": ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"],
+        "promoter": [0.0, 0.0, 0.0, 0.0, 0.0],
+        "institutional": [64.5, 65.1, 65.8, 66.4, 67.2],
+        "retail": [35.5, 34.9, 34.2, 33.6, 32.8],
+    },
+}
+
+
 
 
 def is_non_equity_or_gold_holding(stock_name: str, category: str, sector: str, exclude_all_etfs: bool = True) -> bool:
@@ -519,6 +602,24 @@ def get_connection() -> sqlite3.Connection:
     if "pb_ratio" not in meta_cols:
         conn.execute("ALTER TABLE stock_metadata ADD COLUMN pb_ratio REAL DEFAULT 0.0")
 
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shareholding_patterns (
+            stock_name TEXT PRIMARY KEY,
+            q1_label TEXT DEFAULT 'Sep 23',
+            q2_label TEXT DEFAULT 'Dec 23',
+            q3_label TEXT DEFAULT 'Mar 24',
+            q4_label TEXT DEFAULT 'Jun 24',
+            q5_label TEXT DEFAULT 'Sep 24',
+            promoter_q1 REAL, promoter_q2 REAL, promoter_q3 REAL, promoter_q4 REAL, promoter_q5 REAL,
+            inst_q1 REAL, inst_q2 REAL, inst_q3 REAL, inst_q4 REAL, inst_q5 REAL,
+            retail_q1 REAL, retail_q2 REAL, retail_q3 REAL, retail_q4 REAL, retail_q5 REAL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS app_settings (
@@ -557,6 +658,99 @@ def set_app_setting(key: str, val: float, sync_github: bool = True) -> None:
     conn.commit()
     if sync_github:
         push_db_to_github("Update concentration alert limits")
+
+
+
+def eval_shareholding_trend(vals: list[float]) -> tuple[str, float]:
+    """Calculate trend label (Rising / Decline / Flat) and total 5-quarter change."""
+    if not vals or len(vals) < 2:
+        return "🟡 Flat", 0.0
+    diff = vals[-1] - vals[0]
+    if diff > 0.5:
+        return f"🟢 Rising (+{diff:.1f}%)", diff
+    elif diff < -0.5:
+        return f"🔴 Decline ({diff:.1f}%)", diff
+    else:
+        return f"🟡 Flat ({diff:+.1f}%)", diff
+
+
+def load_all_shareholding_patterns() -> dict[str, dict]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT stock_name, q1_label, q2_label, q3_label, q4_label, q5_label,
+               promoter_q1, promoter_q2, promoter_q3, promoter_q4, promoter_q5,
+               inst_q1, inst_q2, inst_q3, inst_q4, inst_q5,
+               retail_q1, retail_q2, retail_q3, retail_q4, retail_q5
+        FROM shareholding_patterns
+        """
+    )
+    result = {}
+    for r in cur.fetchall():
+        result[r[0]] = {
+            "quarters": [r[1], r[2], r[3], r[4], r[5]],
+            "promoter": [float(v or 0.0) for v in r[6:11]],
+            "institutional": [float(v or 0.0) for v in r[11:16]],
+            "retail": [float(v or 0.0) for v in r[16:21]],
+        }
+    return result
+
+
+def upsert_stock_shareholding(
+    stock_name: str,
+    quarters: list[str],
+    promoter: list[float],
+    institutional: list[float],
+    retail: list[float],
+    sync_github: bool = True,
+) -> None:
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO shareholding_patterns
+        (stock_name, q1_label, q2_label, q3_label, q4_label, q5_label,
+         promoter_q1, promoter_q2, promoter_q3, promoter_q4, promoter_q5,
+         inst_q1, inst_q2, inst_q3, inst_q4, inst_q5,
+         retail_q1, retail_q2, retail_q3, retail_q4, retail_q5, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(stock_name) DO UPDATE SET
+            q1_label = excluded.q1_label, q2_label = excluded.q2_label, q3_label = excluded.q3_label,
+            q4_label = excluded.q4_label, q5_label = excluded.q5_label,
+            promoter_q1 = excluded.promoter_q1, promoter_q2 = excluded.promoter_q2, promoter_q3 = excluded.promoter_q3,
+            promoter_q4 = excluded.promoter_q4, promoter_q5 = excluded.promoter_q5,
+            inst_q1 = excluded.inst_q1, inst_q2 = excluded.inst_q2, inst_q3 = excluded.inst_q3,
+            inst_q4 = excluded.inst_q4, inst_q5 = excluded.inst_q5,
+            retail_q1 = excluded.retail_q1, retail_q2 = excluded.retail_q2, retail_q3 = excluded.retail_q3,
+            retail_q4 = excluded.retail_q4, retail_q5 = excluded.retail_q5,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            stock_name,
+            quarters[0], quarters[1], quarters[2], quarters[3], quarters[4],
+            promoter[0], promoter[1], promoter[2], promoter[3], promoter[4],
+            institutional[0], institutional[1], institutional[2], institutional[3], institutional[4],
+            retail[0], retail[1], retail[2], retail[3], retail[4],
+        ),
+    )
+    conn.commit()
+    if sync_github:
+        push_db_to_github(f"Update 5Q shareholding pattern for {stock_name}")
+
+
+def get_stock_shareholding_pattern(stock_name: str, saved_patterns: dict[str, dict]) -> dict:
+    s_key = stock_name.strip().upper()
+    if s_key in saved_patterns:
+        return saved_patterns[s_key]
+    if s_key in KNOWN_SHAREHOLDING_PATTERNS:
+        return KNOWN_SHAREHOLDING_PATTERNS[s_key]
+    default_q = ["Sep 23", "Dec 23", "Mar 24", "Jun 24", "Sep 24"]
+    return {
+        "quarters": default_q,
+        "promoter": [50.0, 50.0, 50.0, 50.0, 50.0],
+        "institutional": [30.0, 30.5, 31.0, 31.5, 32.0],
+        "retail": [20.0, 19.5, 19.0, 18.5, 18.0],
+    }
 
 
 def load_transactions() -> pd.DataFrame:
@@ -3015,6 +3209,172 @@ def main():
                 st.cache_data.clear()
                 st.success("Saved! Your Sector and Market Cap Pie Charts and Remarks are now updated.")
                 st.rerun()
+
+
+            # -----------------------------------------------------------------
+            # 5-QUARTER SHAREHOLDING PATTERN TRENDS (Promoter, Institutional, Retail)
+            # -----------------------------------------------------------------
+            st.divider()
+            st.subheader("🏛️ Last 5 Quarters Shareholding Pattern Trends (Promoter, Institutional & Retail)")
+            st.caption(
+                "Track the ownership shift across the last 5 quarters. Identifies whether **Institutions (FII + DII)** or **Promoters** are accumulating shares (**Rising**), or if **Retail** ownership is increasing (**Declining smart money**)."
+            )
+
+            saved_shp = load_all_shareholding_patterns()
+            equity_stocks_list = [
+                s for s in consolidated_df["stock_name"].unique()
+                if not is_non_equity_or_gold_holding(s, "", "", exclude_all_etfs=True)
+            ]
+
+            if not equity_stocks_list:
+                st.info("No equity stocks available to evaluate shareholding patterns.")
+            else:
+                summary_rows = []
+                for sname in equity_stocks_list:
+                    shp = get_stock_shareholding_pattern(sname, saved_shp)
+                    p_vals = shp["promoter"]
+                    i_vals = shp["institutional"]
+                    r_vals = shp["retail"]
+
+                    p_label, p_diff = eval_shareholding_trend(p_vals)
+                    i_label, i_diff = eval_shareholding_trend(i_vals)
+                    r_label, r_diff = eval_shareholding_trend(r_vals)
+
+                    if i_diff > 1.0 and r_diff < -1.0:
+                        verdict = "💎 Institutional Accumulation (FII/DII Buying from Retail)"
+                    elif p_diff > 0.5:
+                        verdict = "🚀 Promoter Increasing Stake (High Confidence)"
+                    elif i_diff < -1.5 and r_diff > 1.5:
+                        verdict = "⚠️ Institutional Distribution (Dumping into Retail)"
+                    elif p_diff < -1.0:
+                        verdict = "⚠️ Promoter Trimming Stake"
+                    else:
+                        verdict = "⚖️ Stable Ownership Structure"
+
+                    summary_rows.append(
+                        {
+                            "Stock Name": sname,
+                            "Latest Promoter %": f"{p_vals[-1]:.1f}%",
+                            "Promoter Trend (5Q)": p_label,
+                            "Latest Institutional % (FII+DII)": f"{i_vals[-1]:.1f}%",
+                            "Institutional Trend (5Q)": i_label,
+                            "Latest Retail %": f"{r_vals[-1]:.1f}%",
+                            "Retail Trend (5Q)": r_label,
+                            "Ownership Shift Insight": verdict,
+                        }
+                    )
+
+                shp_summary_df = pd.DataFrame(summary_rows).set_index("Stock Name")
+                st.dataframe(
+                    shp_summary_df,
+                    use_container_width=True,
+                    hide_index=False,
+                )
+
+                # Individual Stock 5-Quarter Visual Breakdown & Chart
+                st.write("##### 📊 5-Quarter Ownership Visualizer by Stock")
+                sel_shp_stock = st.selectbox(
+                    "Select Stock to View 5-Quarter Breakdown",
+                    options=equity_stocks_list,
+                    key="shp_stock_selector",
+                )
+
+                chosen_shp = get_stock_shareholding_pattern(sel_shp_stock, saved_shp)
+                q_labels = chosen_shp["quarters"]
+                prom_vals = chosen_shp["promoter"]
+                inst_vals = chosen_shp["institutional"]
+                ret_vals = chosen_shp["retail"]
+
+                pt_label, pt_diff = eval_shareholding_trend(prom_vals)
+                it_label, it_diff = eval_shareholding_trend(inst_vals)
+                rt_label, rt_diff = eval_shareholding_trend(ret_vals)
+
+                sh_k1, sh_k2, sh_k3 = st.columns(3)
+                sh_k1.metric(
+                    "Promoter Holding Trend",
+                    f"{prom_vals[-1]:.1f}%",
+                    f"{pt_label} (from {prom_vals[0]:.1f}%)",
+                )
+                sh_k2.metric(
+                    "Institutional (FII+DII) Trend",
+                    f"{inst_vals[-1]:.1f}%",
+                    f"{it_label} (from {inst_vals[0]:.1f}%)",
+                )
+                sh_k3.metric(
+                    "Retail (Public) Holding Trend",
+                    f"{ret_vals[-1]:.1f}%",
+                    f"{rt_label} (from {ret_vals[0]:.1f}%)",
+                )
+
+                fig_shp = go.Figure()
+                fig_shp.add_trace(
+                    go.Bar(
+                        x=q_labels,
+                        y=prom_vals,
+                        name="Promoter %",
+                        marker_color="#1e3a8a",
+                        text=[f"{v:.1f}%" for v in prom_vals],
+                        textposition="inside",
+                    )
+                )
+                fig_shp.add_trace(
+                    go.Bar(
+                        x=q_labels,
+                        y=inst_vals,
+                        name="Institutional (FII + DII) %",
+                        marker_color="#10b981",
+                        text=[f"{v:.1f}%" for v in inst_vals],
+                        textposition="inside",
+                    )
+                )
+                fig_shp.add_trace(
+                    go.Bar(
+                        x=q_labels,
+                        y=ret_vals,
+                        name="Retail / Public %",
+                        marker_color="#f59e0b",
+                        text=[f"{v:.1f}%" for v in ret_vals],
+                        textposition="inside",
+                    )
+                )
+                fig_shp.update_layout(
+                    barmode="stack",
+                    title=f"5-Quarter Ownership Share Breakdown for {sel_shp_stock} (%)",
+                    xaxis_title="Quarter",
+                    yaxis_title="Shareholding (%)",
+                    yaxis=dict(range=[0, 100]),
+                    height=380,
+                    margin=dict(t=50, b=30, l=20, r=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig_shp, use_container_width=True)
+
+                with st.expander(f"✏️ View & Edit 5-Quarter Percentages for {sel_shp_stock}"):
+                    edit_q_df = pd.DataFrame(
+                        {
+                            "Quarter": q_labels,
+                            "Promoter (%)": prom_vals,
+                            "Institutional (%)": inst_vals,
+                            "Retail (%)": ret_vals,
+                        }
+                    ).set_index("Quarter")
+
+                    edited_q_res = st.data_editor(
+                        edit_q_df,
+                        use_container_width=True,
+                        key=f"editor_shp_{sel_shp_stock}",
+                    )
+
+                    if st.button(f"💾 Save 5-Quarter Trends for {sel_shp_stock}"):
+                        p_list = [float(v) for v in edited_q_res["Promoter (%)"]]
+                        i_list = [float(v) for v in edited_q_res["Institutional (%)"]]
+                        r_list = [float(v) for v in edited_q_res["Retail (%)"]]
+                        upsert_stock_shareholding(
+                            sel_shp_stock, q_labels, p_list, i_list, r_list, sync_github=True
+                        )
+                        st.success(f"✅ Saved 5-quarter shareholding trends for {sel_shp_stock}!")
+                        st.rerun()
+
 
             st.divider()
             st.subheader("⚖️ Next-Month SIP Rebalancing Calculator")

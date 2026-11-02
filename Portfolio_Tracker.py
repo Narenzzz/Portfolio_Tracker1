@@ -565,6 +565,208 @@ def clean_stock_symbol(s: str) -> str:
     return ALIAS_MAP.get(clean, clean)
 
 
+def resolve_yahoo_ticker(stock_name: str, ticker: str | None = None) -> str:
+    """
+    Resolves a clean, canonical Yahoo Finance ticker symbol for Indian listed equities & ETFs.
+    Handles Kite Tradebook series suffixes like -EQ, -BE, whitespace, and NaN values.
+    """
+    cand = ""
+    if ticker and str(ticker).strip().lower() not in ("nan", "none", "", "null"):
+        cand = str(ticker).strip().upper()
+    elif stock_name and str(stock_name).strip().lower() not in ("nan", "none", "", "null"):
+        cand = str(stock_name).strip().upper()
+
+    if not cand:
+        return ""
+
+    # If it already ends with .NS or .BO, clean base symbol
+    if cand.endswith(".NS") or cand.endswith(".BO"):
+        exchange_suffix = cand[-3:]
+        base = cand[:-3]
+        base_clean = clean_stock_symbol(base)
+        return f"{base_clean}{exchange_suffix}"
+
+    # Strip series suffixes like -EQ, -BE, -BZ, etc.
+    base_clean = clean_stock_symbol(cand)
+    return f"{base_clean}.NS"
+
+
+def fetch_live_market_data(ticker: str, stock_name: str = "") -> dict:
+    """
+    Robust multi-tier live market price and metadata fetcher for Indian listed equities & ETFs.
+    Tier 1: Direct Yahoo Finance Query API (v8 chart) - real-time regularMarketPrice
+    Tier 2: yfinance.Ticker fast_info & info (if yfinance package available)
+    Tier 3: yfinance.Ticker history(period='5d') fallback
+    Tier 4: Google Finance live quote scraper fallback
+    Tier 5: BSE (.BO) fallback if NSE (.NS) lookup returns no price
+    """
+    resolved_tkr = resolve_yahoo_ticker(stock_name, ticker)
+    clean_sym = clean_stock_symbol(stock_name or ticker)
+
+    result = {
+        "cmp": 0.0,
+        "prev_close": 0.0,
+        "source": "",
+        "ticker": resolved_tkr,
+        "sector": None,
+        "category": None,
+        "pe_ratio": None,
+        "pb_ratio": None,
+        "market_cap": None,
+        "success": False,
+    }
+
+    import json
+    import urllib.request
+
+    # Helper: query Yahoo Finance chart JSON endpoint directly via HTTP
+    def _query_yahoo_chart_endpoint(sym: str) -> tuple[float, float, str]:
+        for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+            url = f"https://{host}/v8/finance/chart/{sym}?interval=1d&range=1d"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.5",
+            }
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    if resp.status == 200:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        res_list = data.get("chart", {}).get("result")
+                        if res_list:
+                            meta = res_list[0].get("meta", {})
+                            px = meta.get("regularMarketPrice")
+                            prev = meta.get("chartPreviousClose") or meta.get("previousClose") or 0.0
+                            if not px or px <= 0:
+                                px = prev
+                            if not px or px <= 0:
+                                quotes = res_list[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                                valid = [float(c) for c in quotes if c is not None and float(c) > 0]
+                                if valid:
+                                    px = valid[-1]
+                            if px and float(px) > 0:
+                                return float(px), float(prev or 0.0), "Yahoo Finance API"
+            except Exception:
+                continue
+        return 0.0, 0.0, ""
+
+    # Tier 1: Try Yahoo Chart API on resolved ticker (e.g. SUZLON.NS)
+    px, prev, src = _query_yahoo_chart_endpoint(resolved_tkr)
+    if px > 0:
+        result["cmp"] = px
+        result["prev_close"] = prev
+        result["source"] = src
+        result["success"] = True
+
+    # Tier 2 & 3: Try yfinance package if available for price & metadata enrichment
+    try:
+        import yfinance as yf
+        yt = yf.Ticker(resolved_tkr)
+
+        # Fast info check if price still missing
+        if not result["success"]:
+            try:
+                if hasattr(yt, "fast_info") and yt.fast_info is not None:
+                    fi = yt.fast_info
+                    last_px = getattr(fi, "last_price", None) or getattr(fi, "lastPrice", None)
+                    if last_px and float(last_px) > 0:
+                        result["cmp"] = float(last_px)
+                        result["source"] = "yfinance (fast_info)"
+                        result["success"] = True
+            except Exception:
+                pass
+
+        # Info dictionary for Sector, Market Cap, P/E, P/B
+        try:
+            info = yt.info or {}
+        except Exception:
+            info = {}
+
+        if not result["success"] and info:
+            px = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+            if px and float(px) > 0:
+                result["cmp"] = float(px)
+                result["source"] = "yfinance (info)"
+                result["success"] = True
+
+        # Extract Valuation Multiples & Sector
+        if info:
+            pe_val = info.get("trailingPE") or info.get("forwardPE")
+            if pe_val and float(pe_val) > 0:
+                result["pe_ratio"] = round(float(pe_val), 1)
+
+            pb_val = info.get("priceToBook")
+            if pb_val and float(pb_val) > 0:
+                result["pb_ratio"] = round(float(pb_val), 1)
+
+            sec = info.get("sector") or info.get("industry")
+            if sec:
+                result["sector"] = str(sec).strip()
+
+            mcap = info.get("marketCap")
+            if mcap and float(mcap) > 0:
+                result["market_cap"] = float(mcap)
+                if float(mcap) >= 200_000_000_000:
+                    result["category"] = "Large Cap"
+                elif float(mcap) >= 50_000_000_000:
+                    result["category"] = "Mid Cap"
+                else:
+                    result["category"] = "Small Cap"
+
+        # History fallback if price still missing
+        if not result["success"]:
+            try:
+                hist = yt.history(period="5d")
+                if not hist.empty and "Close" in hist.columns:
+                    valid_closes = hist["Close"].dropna()
+                    if not valid_closes.empty and float(valid_closes.iloc[-1]) > 0:
+                        result["cmp"] = float(valid_closes.iloc[-1])
+                        result["source"] = "yfinance (history)"
+                        result["success"] = True
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Tier 4: BSE (.BO) fallback if NSE (.NS) failed
+    if not result["success"] and resolved_tkr.endswith(".NS"):
+        bo_ticker = resolved_tkr[:-3] + ".BO"
+        px_bo, prev_bo, src_bo = _query_yahoo_chart_endpoint(bo_ticker)
+        if px_bo > 0:
+            result["cmp"] = px_bo
+            result["prev_close"] = prev_bo
+            result["source"] = f"{src_bo} (BSE)"
+            result["ticker"] = bo_ticker
+            result["success"] = True
+
+    # Tier 5: Google Finance live quote scraper fallback
+    if not result["success"] and clean_sym:
+        for exchange in ("NSE", "BOM"):
+            try:
+                gf_url = f"https://www.google.com/finance/quote/{clean_sym}:{exchange}"
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }
+                req = urllib.request.Request(gf_url, headers=headers)
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    if resp.status == 200:
+                        html = resp.read().decode("utf-8", errors="ignore")
+                        clean_html = re.sub(r"&[a-zA-Z0-9#]+;", "", html)
+                        m = re.search(r'class="[^"]*YMlKec fxKbKc[^"]*">\s*([0-9,]+\.?[0-9]*)', clean_html)
+                        if m:
+                            val = float(m.group(1).replace(",", ""))
+                            if val > 0:
+                                result["cmp"] = val
+                                result["source"] = f"Google Finance ({exchange})"
+                                result["success"] = True
+                                break
+            except Exception:
+                continue
+
+    return result
+
+
 def fetch_online_shareholding_pattern(symbol: str) -> dict | None:
     """
     Scrapes the official 5-quarter shareholding pattern table for an NSE/BSE listed company
@@ -1539,7 +1741,8 @@ def compute_fifo_portfolio(
         default_cat, default_sec = lookup_symbol_metadata(stock_key)
         cat = meta.get("category") or grp["category"].iloc[-1] or default_cat
         sec = meta.get("sector") or grp["sector"].iloc[-1] or default_sec
-        tkr = meta.get("ticker") or grp["ticker"].iloc[-1] or f"{stock_key}.NS"
+        raw_tkr = meta.get("ticker") or grp["ticker"].iloc[-1]
+        tkr = resolve_yahoo_ticker(display_name, raw_tkr)
         cached_cmp = float(meta.get("current_price") or 0.0)
         remarks_txt = str(meta.get("remarks") or "")
         default_pe, default_pb = KNOWN_NSE_VALUATION.get(stock_key, (22.5, 3.8))
@@ -3429,49 +3632,74 @@ def main():
                 "Since Zerodha Kite Tradebook files only include stock symbols, we auto-classified known NSE stocks. You can auto-fetch any remaining Sector / Market Cap tags & Live Prices from Yahoo Finance below, or edit them directly in the table."
             )
 
-            if YFINANCE_AVAILABLE and st.button(
-                "🔄 Auto-Fetch Live Prices, Sectors & Market Cap from Yahoo Finance",
-                type="primary",
-            ):
-                updated_count = 0
-                with st.spinner("Querying Yahoo Finance for NSE/BSE stocks..."):
-                    for _, row in consolidated_df.iterrows():
-                        sname = row["stock_name"]
-                        tkr = str(row["ticker"]).strip() or f"{sname}.NS"
-                        cur_cat = row["category"]
-                        cur_sec = row["sector"]
-                        try:
-                            yt = yf.Ticker(tkr)
-                            hist = yt.history(period="5d")
-                            latest_px = float(hist["Close"].iloc[-1]) if not hist.empty else float(row["cmp"])
-                            if cur_cat == "Uncategorized" or cur_sec == "Other":
-                                info = yt.info or {}
-                                yf_sec = info.get("sector") or info.get("industry")
-                                if yf_sec and cur_sec == "Other":
-                                    cur_sec = str(yf_sec).strip()
-                                mcap = info.get("marketCap")
-                                if mcap and cur_cat == "Uncategorized":
-                                    if mcap >= 200_000_000_000:
-                                        cur_cat = "Large Cap"
-                                    elif mcap >= 50_000_000_000:
-                                        cur_cat = "Mid Cap"
-                                    else:
-                                        cur_cat = "Small Cap"
-                            pe_fetched = info.get("trailingPE") or info.get("forwardPE")
-                            pb_fetched = info.get("priceToBook")
-                            pe_to_save = float(pe_fetched) if pe_fetched and pe_fetched > 0 else None
-                            pb_to_save = float(pb_fetched) if pb_fetched and pb_fetched > 0 else None
-                            upsert_stock_metadata(
-                                sname, tkr, cur_cat, cur_sec, latest_px,
-                                pe_ratio=pe_to_save, pb_ratio=pb_to_save, sync_github=False
-                            )
-                            updated_count += 1
-                        except Exception:
-                            pass
-                push_db_to_github("Auto-fetch Yahoo Finance live prices & sectors")
-                st.cache_data.clear()
-                st.success(f"Updated live prices & metadata for {updated_count} stocks!")
-                st.rerun()
+            col_fetch_btn, col_fetch_opt = st.columns([2, 3])
+            with col_fetch_btn:
+                fetch_clicked = st.button(
+                    "🔄 Auto-Fetch Live Prices, Sectors & Market Cap",
+                    type="primary",
+                    help="Queries Yahoo Finance & Google Finance to fetch real-time Current Market Price (CMP), valuation multiples (P/E, P/B), and Sector tags for all portfolio stocks.",
+                )
+            with col_fetch_opt:
+                st.caption("⚡ Multi-tier live engine: Yahoo Finance Chart API $\\rightarrow$ `yfinance` fast_info $\\rightarrow$ Google Finance fallback.")
+
+            if fetch_clicked:
+                updated_stocks = []
+                failed_stocks = []
+                status_container = st.empty()
+                progress_bar = st.progress(0)
+                total_to_fetch = len(consolidated_df)
+
+                for idx, (_, row) in enumerate(consolidated_df.iterrows()):
+                    sname = str(row["stock_name"]).strip()
+                    raw_tkr = str(row["ticker"]).strip()
+                    resolved_tkr = resolve_yahoo_ticker(sname, raw_tkr)
+                    cur_cat = str(row["category"]).strip()
+                    cur_sec = str(row["sector"]).strip()
+
+                    status_container.info(f"⏳ Fetching live quote for **{sname}** (`{resolved_tkr}`)... ({idx+1}/{total_to_fetch})")
+                    progress_bar.progress((idx + 1) / total_to_fetch)
+
+                    quote_res = fetch_live_market_data(resolved_tkr, sname)
+                    if quote_res and quote_res.get("success") and quote_res.get("cmp", 0.0) > 0:
+                        new_cmp = float(quote_res["cmp"])
+                        fetched_cat = quote_res.get("category")
+                        fetched_sec = quote_res.get("sector")
+                        pe_to_save = quote_res.get("pe_ratio")
+                        pb_to_save = quote_res.get("pb_ratio")
+
+                        # Update category and sector if currently default/uncategorized
+                        if cur_cat in ("Uncategorized", "", "None") and fetched_cat:
+                            cur_cat = fetched_cat
+                        if cur_sec in ("Other", "", "None") and fetched_sec:
+                            cur_sec = fetched_sec
+
+                        upsert_stock_metadata(
+                            stock_name=sname,
+                            ticker=resolved_tkr,
+                            category=cur_cat,
+                            sector=cur_sec,
+                            current_price=new_cmp,
+                            pe_ratio=pe_to_save,
+                            pb_ratio=pb_to_save,
+                            sync_github=False,
+                        )
+                        src = quote_res.get("source", "Live API")
+                        updated_stocks.append(f"**{sname}**: ₹{new_cmp:,.2f} ({src})")
+                    else:
+                        failed_stocks.append(f"**{sname}** (`{resolved_tkr}`)")
+
+                status_container.empty()
+                progress_bar.empty()
+
+                if updated_stocks:
+                    push_db_to_github(f"Auto-fetch live prices for {len(updated_stocks)} stocks")
+                    st.cache_data.clear()
+                    st.success(f"✅ Successfully updated live CMP for **{len(updated_stocks)}/{total_to_fetch}** stocks:\n\n• " + "\n• ".join(updated_stocks))
+                    if failed_stocks:
+                        st.warning(f"⚠️ Could not fetch live prices for: {', '.join(failed_stocks)}. You can manually enter CMP in the table below.")
+                    st.rerun()
+                else:
+                    st.error("❌ Could not reach price servers. Please check your internet connection or enter CMP directly in the editable table below.")
 
             edit_meta_df = pd.DataFrame(
                 {
@@ -3518,6 +3746,49 @@ def main():
                 st.cache_data.clear()
                 st.success("Saved! Your Sector and Market Cap Pie Charts and Remarks are now updated.")
                 st.rerun()
+
+            with st.expander("🔍 Test / Refresh Live Quote for a Single Stock"):
+                sq_c1, sq_c2 = st.columns([2, 1])
+                with sq_c1:
+                    test_stock_sel = st.selectbox(
+                        "Select Stock to Fetch Live Quote",
+                        options=consolidated_df["stock_name"].unique(),
+                        key="test_single_quote_select",
+                    )
+                with sq_c2:
+                    st.write("")
+                    st.write("")
+                    btn_run_single_quote = st.button("🔎 Fetch Live Price", key="btn_run_single_quote")
+
+                if btn_run_single_quote and test_stock_sel:
+                    matched_rows = consolidated_df[consolidated_df["stock_name"] == test_stock_sel]
+                    if not matched_rows.empty:
+                        m_row = matched_rows.iloc[0]
+                        m_tkr = resolve_yahoo_ticker(test_stock_sel, m_row["ticker"])
+                        with st.spinner(f"Querying live price for {test_stock_sel} ({m_tkr})..."):
+                            single_q = fetch_live_market_data(m_tkr, test_stock_sel)
+                            if single_q and single_q.get("success") and single_q.get("cmp", 0) > 0:
+                                c_px = single_q["cmp"]
+                                c_src = single_q.get("source", "Live API")
+                                c_pe = single_q.get("pe_ratio")
+                                c_pb = single_q.get("pb_ratio")
+                                st.success(
+                                    f"🎯 **{test_stock_sel}** (`{m_tkr}`): Live Market Price = **₹{c_px:,.2f}** ({c_src}) | P/E: {c_pe or '—'} | P/B: {c_pb or '—'}"
+                                )
+                                if st.button(f"💾 Apply ₹{c_px:,.2f} to {test_stock_sel} in Database", key=f"apply_cmp_{test_stock_sel}"):
+                                    upsert_stock_metadata(
+                                        stock_name=test_stock_sel,
+                                        ticker=m_tkr,
+                                        current_price=c_px,
+                                        pe_ratio=c_pe,
+                                        pb_ratio=c_pb,
+                                        sync_github=True,
+                                    )
+                                    st.cache_data.clear()
+                                    st.success(f"Applied live CMP ₹{c_px:,.2f} for {test_stock_sel}!")
+                                    st.rerun()
+                            else:
+                                st.error(f"Could not fetch live price for {test_stock_sel} (`{m_tkr}`). Check your internet connection or ticker symbol.")
 
 
             # -----------------------------------------------------------------

@@ -3556,10 +3556,13 @@ def main():
     st.markdown("Pull trades parsed by your email AI agent instantly into your portfolio.")
     
     # You can also hardcode this URL or put it in st.secrets to hide the input box
-    agent_sheet_url = st.text_input(
-        "Agent Google Sheet (Published CSV URL)", 
-        placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"
-    )
+    # Pulls the URL securely from Streamlit Cloud Secrets
+    agent_sheet_url = st.secrets.get("AGENT_CSV_URL", "")
+    
+    # Fallback just in case the secret is missing
+    if not agent_sheet_url:
+        agent_sheet_url = st.text_input("Agent Google Sheet (Published CSV URL)")
+
     
     if st.button("🔄 Sync New Trades from Agent", type="primary"):
         if not agent_sheet_url:

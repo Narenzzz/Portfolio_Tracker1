@@ -3551,56 +3551,50 @@ def main():
     # =========================================================================
     # NEW: AI AGENT LIVE AUTO-SYNC (Make.com -> Google Sheets -> Streamlit)
     # =========================================================================
-    st.divider()
-    st.subheader("🤖 Auto-Sync from AI Agent (Live Google Sheet)")
-    st.markdown("Pull trades parsed by your email AI agent instantly into your portfolio.")
-    
-    # You can also hardcode this URL or put it in st.secrets to hide the input box
-    # Pulls the URL securely from Streamlit Cloud Secrets
-    agent_sheet_url = st.secrets.get("AGENT_CSV_URL", "")
-    
-    # Fallback just in case the secret is missing
-    if not agent_sheet_url:
-        agent_sheet_url = st.text_input("Agent Google Sheet (Published CSV URL)")
+        st.divider()
+    st.subheader("🤖 Auto-Sync from AI Agent")
+    st.markdown("Pull trades read from your Zerodha contract notes into your portfolio.")
 
-    
     if st.button("🔄 Sync New Trades from Agent", type="primary"):
-        if not agent_sheet_url:
-            st.warning("Please provide the published CSV URL of the agent's Google Sheet.")
+        gh_tok, gh_rep, gh_br = get_github_sync_config()
+        if not gh_tok or not gh_rep:
+            st.error("GITHUB_TOKEN / GITHUB_REPO are missing in Streamlit Secrets.")
         else:
             try:
-                with st.spinner("Connecting to Agent Database..."):
-                    # 1. Read live data directly from the Google Sheet Make.com is updating
-                    live_agent_df = pd.read_csv(agent_sheet_url)
-                    
-                    # 2. Map the agent's simple columns to your strict SQLite schema
+                with st.spinner("Reading agent_trades.csv from your private repo..."):
+                    req = urllib.request.Request(
+                        f"https://api.github.com/repos/{gh_rep}/contents/agent_trades.csv?ref={gh_br}",
+                        headers={
+                            "Authorization": f"Bearer {gh_tok}",
+                            "Accept": "application/vnd.github.raw+json",
+                            "User-Agent": "Streamlit-Portfolio-Tracker",
+                        },
+                    )
+                    csv_text = urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
+                    live_agent_df = pd.read_csv(io.StringIO(csv_text))
+                    live_agent_df.columns = [c.strip() for c in live_agent_df.columns]
+                    live_agent_df = live_agent_df.dropna(subset=["Ticker", "Quantity"])
+
                     mapped = pd.DataFrame()
-                    mapped["stock_name"] = live_agent_df["Ticker"].astype(str).str.strip()
-                    
-                    # Parse dates safely
-                    dt_series = pd.to_datetime(live_agent_df["Date"], errors='coerce')
-                    mapped["month"] = dt_series.dt.strftime("%b %Y").fillna(datetime.now().strftime("%b %Y"))
-                    mapped["tx_date"] = dt_series.dt.strftime("%Y-%m-%d").fillna(date.today().isoformat())
-                    
+                    mapped["stock_name"] = live_agent_df["Ticker"].astype(str).str.strip().str.upper()
+                    dt_series = pd.to_datetime(live_agent_df["Date"], errors="coerce")
+                    mapped["month"] = dt_series.dt.strftime("%b %Y")
+                    mapped["tx_date"] = dt_series.dt.strftime("%Y-%m-%d")
                     mapped["tx_type"] = live_agent_df["Buy/Sell"].astype(str).str.strip().str.upper()
-                    mapped["buy_price"] = pd.to_numeric(live_agent_df["Price"], errors='coerce').fillna(0.0)
-                    mapped["qty"] = pd.to_numeric(live_agent_df["Quantity"], errors='coerce').fillna(0.0)
+                    mapped["buy_price"] = pd.to_numeric(live_agent_df["Price"], errors="coerce").fillna(0.0)
+                    mapped["qty"] = pd.to_numeric(live_agent_df["Quantity"], errors="coerce").fillna(0.0)
                     mapped["invested_rs"] = (mapped["qty"] * mapped["buy_price"]).round(2)
-                    
-                    # Generate a unique trade_id using Date + Ticker to prevent duplicate imports
-                    mapped["trade_id"] = "AG-" + mapped["tx_date"] + "-" + mapped["stock_name"] + "-" + mapped["tx_type"]
+                    mapped["trade_id"] = "AG-" + live_agent_df["TradeNo"].astype(str).str.strip()
                     mapped["notes"] = "Auto-imported by AI Agent"
-                    
-                    # 3. Inject into your SQLite database and auto-push to GitHub
+
                     ins_n, skip_n = insert_transactions_df(mapped, mode="append")
                     st.cache_data.clear()
-                    
-                    if ins_n > 0:
-                        st.success(f"✅ Agent Sync Complete! Added {ins_n} new trades. (Skipped {skip_n} duplicates).")
-                        st.rerun()
-                    else:
-                        st.info(f"👍 Up to date! No new trades found. (Skipped {skip_n} already synced).")
-                        
+
+                if ins_n > 0:
+                    st.success(f"✅ Added {ins_n} new trades (skipped {skip_n} already synced).")
+                    st.rerun()
+                else:
+                    st.info(f"👍 Up to date. No new trades (skipped {skip_n} already synced).")
             except Exception as e:
                 st.error(f"Failed to sync from agent: {e}")
 

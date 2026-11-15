@@ -4178,7 +4178,7 @@ def main():
             )
             st.divider()
 
-        st.subheader("🗂️ Complete Delivery Transaction Log")
+            st.subheader("🗂️ Complete Delivery Transaction Log")
         if tx_df.empty:
             st.info("No delivery transactions recorded yet.")
         else:
@@ -4206,7 +4206,7 @@ def main():
                     st.cache_data.clear()
                     st.rerun()
 
-                        st.write("##### 🗑️ Delete Wrong / Duplicate Trades")
+            st.write("##### 🗑️ Delete Wrong / Duplicate Trades")
             st.caption(
                 "Tick the **Delete** box on any trade, then confirm and click **Delete Selected Trades**. "
                 "Tip: your manual entries have an empty Trade ID, while agent trades start with `AG-`."
@@ -4264,6 +4264,7 @@ def main():
                     st.cache_data.clear()
                     st.success(f"✅ Deleted {len(ids_to_delete)} trade(s).")
                     st.rerun()
+
 
 if __name__ == "__main__":
     main()

@@ -4206,27 +4206,64 @@ def main():
                     st.cache_data.clear()
                     st.rerun()
 
-            st.dataframe(
-                tx_df.sort_values(["tx_date", "id"], ascending=[False, False]).rename(
-                    columns={
-                        "id": "ID",
-                        "month": "Month",
-                        "tx_date": "Trade Date",
-                        "stock_name": "Stock",
-                        "category": "Category",
-                        "sector": "Sector",
-                        "tx_type": "Type",
-                        "buy_price": "Price (₹)",
-                        "qty": "Qty",
-                        "invested_rs": "Value (₹)",
-                        "trade_id": "Kite Trade ID",
-                        "notes": "Notes",
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True,
+                        st.write("##### 🗑️ Delete Wrong / Duplicate Trades")
+            st.caption(
+                "Tick the **Delete** box on any trade, then confirm and click **Delete Selected Trades**. "
+                "Tip: your manual entries have an empty Trade ID, while agent trades start with `AG-`."
+            )
+            only_manual = st.checkbox(
+                "Show only my manual entries (empty Trade ID)", value=False
             )
 
+            log_df = tx_df.sort_values(["tx_date", "id"], ascending=[False, False]).copy()
+            if only_manual:
+                log_df = log_df[log_df["trade_id"].fillna("").astype(str).str.strip() == ""]
+
+            log_df.insert(0, "Delete", False)
+            log_view = log_df.rename(
+                columns={
+                    "id": "ID",
+                    "month": "Month",
+                    "tx_date": "Trade Date",
+                    "stock_name": "Stock",
+                    "category": "Category",
+                    "sector": "Sector",
+                    "tx_type": "Type",
+                    "buy_price": "Price (₹)",
+                    "qty": "Qty",
+                    "invested_rs": "Value (₹)",
+                    "trade_id": "Kite Trade ID",
+                    "notes": "Notes",
+                }
+            )
+
+            edited_log = st.data_editor(
+                log_view,
+                use_container_width=True,
+                hide_index=True,
+                disabled=[c for c in log_view.columns if c != "Delete"],
+                column_config={
+                    "Delete": st.column_config.CheckboxColumn("🗑️ Delete", default=False),
+                },
+                key="tx_log_delete_editor",
+            )
+
+            ids_to_delete = edited_log.loc[edited_log["Delete"], "ID"].astype(int).tolist()
+            if ids_to_delete:
+                st.warning(f"{len(ids_to_delete)} trade(s) selected for deletion.")
+                confirm_del = st.checkbox(
+                    "Yes, permanently delete the selected trades", key="confirm_tx_delete"
+                )
+                if st.button("🗑️ Delete Selected Trades", type="primary", disabled=not confirm_del):
+                    conn = get_connection()
+                    conn.executemany(
+                        "DELETE FROM transactions WHERE id = ?", [(i,) for i in ids_to_delete]
+                    )
+                    conn.commit()
+                    push_db_to_github(f"Delete {len(ids_to_delete)} transaction(s)")
+                    st.cache_data.clear()
+                    st.success(f"✅ Deleted {len(ids_to_delete)} trade(s).")
+                    st.rerun()
 
 if __name__ == "__main__":
     main()
